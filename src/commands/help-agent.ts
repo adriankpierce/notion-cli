@@ -80,6 +80,28 @@ notion file upload <page-id> --url https://example.com/report.pdf
 For public media URLs, enhanced Markdown also supports images and media tags.
 Local files use Notion's upload lifecycle internally.
 
+## 6. Convert URLs and stage ingestion
+
+\`\`\`bash
+notion recipes list --recipes-dir ./team-recipes
+notion recipes run https://example.com/post --recipe auto \
+  --recipes-dir ./team-recipes > artifact.json
+notion ingest stage https://example.com/post --recipe auto \
+  --recipes-dir ./team-recipes --page <page-id> --manifest ingest.json
+notion ingest apply ingest.json --expect-digest <reviewed-sha256>
+notion ingest reconcile ingest.json --page <created-page-id> \
+  --expect-digest <reviewed-sha256>
+\`\`\`
+
+Recipe commands emit artifacts without Notion authentication. Recipes are
+executable local code; load only trusted directories. Staging may read its
+Notion target but never mutates it. Apply consumes the reviewed manifest and
+digest without rerunning the recipe or refetching the source URL.
+An unknown new-page outcome requires explicit reconciliation with its page ID;
+never retry that creation blindly or reconcile while its apply process is alive.
+Keep apply's private companion journal files beside the original manifest, and
+always resume or reconcile using that original manifest path.
+
 ## Typed properties and filters
 
 Inspect \`db schema\` first. Property names and select/status values are

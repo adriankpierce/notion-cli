@@ -29,6 +29,23 @@ describe('documentation contract', () => {
     expect(readme).toContain('Notion Workers are complementary');
   });
 
+  it('documents generic artifact recipes and digest-bound staged ingestion', () => {
+    for (const document of [readme, skill]) {
+      expect(document).toContain('notion recipes list');
+      expect(document).toContain('notion recipes describe');
+      expect(document).toContain('notion recipes run');
+      expect(document).toContain('--recipes-dir');
+      expect(document).toContain('notion ingest stage');
+      expect(document).toContain('notion ingest apply');
+      expect(document).toContain('notion ingest reconcile');
+      expect(document).toContain('--expect-digest');
+    }
+    expect(readme).toContain('do not require `NOTION_API_TOKEN`');
+    expect(readme).toContain('does not execute a recipe or fetch the source URL again');
+    expect(readme).toContain('private companion journal files');
+    expect(readme).toContain('original manifest path');
+  });
+
   it('does not teach retired command surfaces', () => {
     const retiredExamples = [
       'notion find ',

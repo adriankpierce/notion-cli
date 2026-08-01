@@ -254,6 +254,94 @@ notion page property <page-id> <property-id> --all --json
 paginated relation, rollup, people, title, and rich-text values. Use `--cursor`
 for one continuation page or `--all` for a guarded complete traversal.
 
+## Recipes and staged ingestion
+
+Recipes are user-supplied, content-agnostic adapters that turn a URL into a
+reviewable ingestion artifact. This package does not ship source-specific
+recipes. Point the CLI at one or more trusted recipe directories explicitly;
+repeat the option when composing a local collection. Duplicate recipe names
+are rejected rather than resolved by directory precedence:
+
+```bash
+notion recipes list --recipes-dir ./team-recipes --recipes-dir ./.local-recipes
+notion recipes describe article --recipes-dir ./team-recipes
+notion recipes run https://example.com/post \
+  --recipe auto --recipes-dir ./team-recipes --timeout 30000 > artifact.json
+```
+
+`recipes list`, `recipes describe`, and `recipes run` are artifact-only commands:
+they do not initialize a Notion client and do not require `NOTION_API_TOKEN`.
+`run` emits one JSON artifact on stdout. Diagnostics belong on stderr. Explicit
+recipe names are preferred for unattended jobs; `auto` uses deterministic recipe
+selection and fails when the available recipes do not produce one unambiguous
+match. A recipe is unsandboxed executable local code: it can access the
+filesystem and network and can spawn processes. Load recipes only from
+directories you trust. Timeout and output limits bound the direct recipe
+runner; process cleanup is best-effort and is not an OS sandbox for descendants
+that outlive the direct recipe process.
+
+Each recipe occupies its own directory with a closed `recipe.json` descriptor.
+The descriptor declares schema version 1, a lowercase name, a recipe release,
+an executable command plus contained entry file, and optional literal URL
+matchers (scheme, host, host suffix, and path prefix). The subprocess receives
+one `{schema_version, source_url}` JSON request on stdin and must return one
+bounded JSON artifact on stdout containing `source_url`, enhanced `markdown`,
+an optional title, and optional SHA-256 asset attestations. Logs go to stderr.
+Exported JSON-schema constants provide a machine-readable structural baseline;
+the runtime validators additionally enforce canonical HTTP(S) URLs, literal
+matcher syntax, UTF-8 byte limits, and other semantic constraints. Unknown
+fields, ambiguous matches, path escapes, malformed UTF-8, extra stdout,
+timeouts, and output overflows fail closed.
+
+Ingestion is a separate, two-step Notion workflow. Stage first, review the
+private manifest and its printed digest, then apply exactly that manifest:
+
+```bash
+notion ingest stage https://example.com/post \
+  --recipe auto --recipes-dir ./team-recipes \
+  --page <existing-page-id> --manifest ./ingest-manifest.json
+
+notion ingest stage https://example.com/post \
+  --recipe article --recipes-dir ./team-recipes \
+  --parent <parent-id> --parent-type page \
+  --manifest ./ingest-manifest.json
+
+notion ingest apply ./ingest-manifest.json \
+  --expect-digest <sha256-printed-by-stage>
+
+# Only after an unknown new-page result and once its page ID is known:
+notion ingest reconcile ./ingest-manifest.json --page <created-page-id> \
+  --expect-digest <sha256-printed-by-stage>
+```
+
+`ingest stage` never mutates Notion. Existing-page staging reads the page to bind
+its current Markdown and edit timestamp; database-parent staging resolves the
+database to a data source. Page-parent staging is artifact-only and requires no
+Notion authentication. Choose exactly one target mode: `--page` for an existing
+page, or `--parent` with `--parent-type page|database` for a new page.
+New-page artifacts must provide an explicit title so Notion cannot implicitly
+extract the first H1 from the digest-bound body. Database staging automatically
+binds the schema's title property; `--title-property` can select it explicitly.
+`ingest apply` does not execute a recipe or fetch the source URL again. It checks
+the separately reviewed digest, revalidates the staged preconditions, mutates
+sequentially, and reports uncertain or partial outcomes instead of replaying an
+ambiguous write. A new-page write with an unknown outcome must be reconciled
+with the known created page ID; do not blindly rerun it. Reconcile only after the
+original apply process has terminated—never race recovery against a request that
+may still be in flight. The append-only local creation journal arbitrates recovery
+and permits a new attempt only after Notion definitively rejected the prior one.
+Apply creates private companion journal files beside the manifest. After any
+creation attempt, do not move, copy, or delete the manifest independently of
+those files; resume apply or reconcile with the original manifest path. Keep the
+whole set private: it contains the exact staged content.
+
+When a recipe includes asset attestations, every enhanced-Markdown media source
+must have a matching type, byte length, and SHA-256 digest. Apply verifies the
+media again through Notion's readback URLs, so rehosting does not weaken the
+content binding. Those downloads reject redirects and private/local network
+addresses, are pinned to a validated DNS result, and are bounded to 128 MiB per
+asset, 512 MiB in aggregate, and five minutes per verification pass.
+
 ## Images and files
 
 Enhanced Markdown accepts media that already has a public URL. For example:

@@ -384,27 +384,32 @@ describe('NotionClient', () => {
       expect(global.fetch).toHaveBeenCalledTimes(2);
     });
 
-    it('should honor Retry-After for service overload responses', async () => {
-      const { NotionClient } = await import('../src/client');
-      const client = new NotionClient({ token: 'test_token', maxRetries: 1 });
-      global.fetch = vi.fn()
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 529,
-          statusText: 'Service Overload',
-          headers: new Headers({ 'Retry-After': '0' }),
-          json: vi.fn().mockResolvedValue({ code: 'service_overload', message: 'Busy' }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: vi.fn().mockResolvedValue({ id: 'page-1' }),
-        });
+    it.each([429, 529])(
+      'should not replay an unsafe POST after an HTTP %s response',
+      async (status) => {
+        const { NotionClient } = await import('../src/client');
+        const client = new NotionClient({ token: 'test_token', maxRetries: 1 });
+        global.fetch = vi.fn()
+          .mockResolvedValueOnce({
+            ok: false,
+            status,
+            statusText: 'Service Overload',
+            headers: new Headers({ 'Retry-After': '0' }),
+            json: vi.fn().mockResolvedValue({ code: 'service_overload', message: 'Busy' }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            headers: new Headers(),
+            json: vi.fn().mockResolvedValue({ id: 'page-1' }),
+          });
 
-      await expect(client.patch('pages/1', { icon: null })).resolves.toEqual({ id: 'page-1' });
-      expect(global.fetch).toHaveBeenCalledTimes(2);
-    });
+        await expect(client.post('pages', { markdown: '# New' }, undefined, {
+          retrySafe: false,
+        })).rejects.toMatchObject({ status });
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+      },
+    );
 
     it('should fallback to statusText when error has no message', async () => {
       const { NotionClient } = await import('../src/client');
@@ -728,6 +733,24 @@ describe('NotionClient', () => {
         'Notion API token not found. Set NOTION_API_TOKEN or create ~/.config/notion/api_key'
       );
       vi.doUnmock('fs');
+    });
+
+    it('should support hermetic token checks that ignore ambient config files', async () => {
+      delete process.env.NOTION_API_TOKEN;
+      delete process.env.NOTION_TOKEN;
+      delete process.env.NOTION_API_KEY;
+      process.env.NOTION_CLI_DISABLE_CONFIG = '1';
+      const readFileSync = vi.fn(() => 'ambient_token');
+      vi.doMock('fs', () => ({ readFileSync }));
+
+      try {
+        const { getTokenSync } = await import('../src/client');
+        expect(() => getTokenSync()).toThrow('Notion API token not found');
+        expect(readFileSync).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.NOTION_CLI_DISABLE_CONFIG;
+        vi.doUnmock('fs');
+      }
     });
   });
 

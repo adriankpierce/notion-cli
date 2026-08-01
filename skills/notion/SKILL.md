@@ -162,6 +162,55 @@ is reported. Personal access tokens do not expose that value through the
 current-user response, so Notion enforces any lower limit at upload creation.
 Do not retain Notion-hosted response URLs as permanent asset URLs; they expire.
 
+## Recipes and staged ingestion
+
+Recipes convert a URL into a reviewable JSON artifact without contacting Notion.
+This package ships no source-specific recipes. Load executable recipes only from
+trusted directories and make discovery explicit:
+
+```bash
+notion recipes list --recipes-dir ./team-recipes
+notion recipes describe article --recipes-dir ./team-recipes
+notion recipes run https://example.com/post \
+  --recipe auto --recipes-dir ./team-recipes --timeout 30000 > artifact.json
+```
+
+Recipe commands do not require `NOTION_API_TOKEN`. Prefer a named recipe for
+unattended work; `auto` must resolve one deterministic, unambiguous match.
+Recipes are unsandboxed executable code that can access files, the network, and
+spawn processes. Use only explicitly trusted recipe directories.
+
+Use staged ingestion for Notion writes. Stage performs no mutation, even when it
+reads a target page to bind the plan:
+
+```bash
+notion ingest stage https://example.com/post \
+  --recipe article --recipes-dir ./team-recipes \
+  --page <page-id> --manifest ./ingest-manifest.json
+notion ingest apply ./ingest-manifest.json \
+  --expect-digest <sha256-printed-by-stage>
+```
+
+For a new page, replace `--page` with `--parent <id> --parent-type page|database`.
+The recipe artifact must include a title for new pages. Database staging binds
+the schema title property automatically; `--title-property` is an explicit
+override.
+Review both the private manifest and the separately printed digest. Apply takes
+content only from that manifest: it does not rerun the recipe or refetch the
+source, though it still reads Notion and any readback asset URLs to verify
+preconditions and results. If apply reports an unknown new-page write outcome,
+do not rerun it blindly. Once the created page ID is known, reconcile it
+explicitly, but only after the original apply process has terminated:
+
+```bash
+notion ingest reconcile ./ingest-manifest.json --page <created-page-id> \
+  --expect-digest <sha256-printed-by-stage>
+```
+
+Apply writes private companion journal files beside the manifest. After a
+creation attempt, keep them with the manifest and continue from the original
+manifest path; never move, copy, or delete the manifest independently.
+
 ## Comments
 
 ```bash

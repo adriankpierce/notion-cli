@@ -244,10 +244,10 @@ export class NotionClient {
       }
 
       const apiError = await buildApiError(response);
-      const throttled = response.status === 429 || response.status === 529;
-      const retryableSafeFailure = retrySafe && response.status >= 500;
+      const retryableResponse = retrySafe
+        && (response.status === 429 || response.status >= 500);
 
-      if (attempt < this.maxRetries && (throttled || retryableSafeFailure)) {
+      if (attempt < this.maxRetries && retryableResponse) {
         const delayMs = apiError.retryAfterSeconds !== undefined
           ? apiError.retryAfterSeconds * 1000
           : backoffDelayMs(attempt);
@@ -338,6 +338,14 @@ export function getTokenSync(): string {
   // Priority: env var > config file
   const envToken = process.env.NOTION_API_TOKEN || process.env.NOTION_TOKEN || process.env.NOTION_API_KEY;
   if (envToken) return envToken;
+
+  // Hermetic callers can explicitly prevent ambient credentials from a user config.
+  if (process.env.NOTION_CLI_DISABLE_CONFIG === '1') {
+    throw new Error(
+      'Notion API token not found. Set NOTION_API_TOKEN or create ~/.config/notion/api_key ' +
+      '(legacy NOTION_TOKEN and NOTION_API_KEY variables are also supported).'
+    );
+  }
 
   // Try config file locations
   const configPaths = [

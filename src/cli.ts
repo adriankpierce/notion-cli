@@ -18,9 +18,34 @@ import { registerCommentsCommand } from './commands/comments.js';
 import { registerHelpAgentCommand } from './commands/help-agent.js';
 import { registerSkillCommand } from './commands/skill.js';
 import { registerFileCommand } from './commands/file.js';
+import { registerRecipesCommand } from './commands/recipes.js';
+import { registerIngestCommand } from './commands/ingest.js';
 
 function collectQueryParam(value: string, previous: string[]): string[] {
   return [...previous, value];
+}
+
+function belongsToCommand(command: Command, name: string): boolean {
+  let current: Command | null = command;
+  while (current) {
+    if (current.name() === name) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+function isAuthFreeCommand(command: Command): boolean {
+  if (
+    command.name() === 'quickstart'
+    || belongsToCommand(command, 'skill')
+    || belongsToCommand(command, 'recipes')
+  ) {
+    return true;
+  }
+
+  return belongsToCommand(command, 'ingest')
+    && command.name() === 'stage'
+    && command.opts().parentType === 'page';
 }
 
 const program = new Command();
@@ -32,8 +57,7 @@ program
   .option('--data-source-id <id>', 'Explicit data source ID for multi-data-source databases')
   .hook('preAction', (thisCommand, actionCommand) => {
     // Skip auth for commands that don't need the Notion API
-    const cmdName = actionCommand.name();
-    if (cmdName === 'install' || actionCommand.parent?.name() === 'skill' || cmdName === 'quickstart') {
+    if (isAuthFreeCommand(actionCommand)) {
       return;
     }
     const opts = thisCommand.opts();
@@ -50,6 +74,8 @@ registerCommentsCommand(program);
 registerHelpAgentCommand(program);
 registerSkillCommand(program);
 registerFileCommand(program);
+registerRecipesCommand(program);
+registerIngestCommand(program);
 
 // Raw API command for advanced users
 program

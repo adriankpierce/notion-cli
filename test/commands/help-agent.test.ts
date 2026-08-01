@@ -69,6 +69,19 @@ describe('Help Agent Command', () => {
       expect(output).toContain('stderr');
     });
 
+    it('should include recipe and digest-bound ingestion guidance', async () => {
+      await program.parseAsync(['node', 'test', 'quickstart']);
+
+      const output = (console.log as any).mock.calls[0][0];
+      expect(output).toContain('notion recipes list');
+      expect(output).toContain('notion recipes run');
+      expect(output).toContain('notion ingest stage');
+      expect(output).toContain('notion ingest apply');
+      expect(output).toContain('notion ingest reconcile');
+      expect(output).toContain('--expect-digest');
+      expect(output).toContain('without rerunning the recipe');
+    });
+
     it('should include property type documentation', async () => {
       await program.parseAsync(['node', 'test', 'quickstart']);
 

@@ -16,6 +16,8 @@ describe('published CLI surface', () => {
       'registerHelpAgentCommand',
       'registerSkillCommand',
       'registerFileCommand',
+      'registerRecipesCommand',
+      'registerIngestCommand',
     ];
     const retiredRegistrations = [
       'registerBlocksCommand',
@@ -42,6 +44,12 @@ describe('published CLI surface', () => {
 
   it('does not accept integration tokens on the command line', () => {
     expect(cliSource).not.toContain(".option('--token");
+  });
+
+  it('keeps artifact-only recipe and page-parent staging commands auth-free', () => {
+    expect(cliSource).toContain("belongsToCommand(command, 'recipes')");
+    expect(cliSource).toContain("belongsToCommand(command, 'ingest')");
+    expect(cliSource).toContain("command.opts().parentType === 'page'");
   });
 
   it('awaits asynchronous commands behind one rejection boundary', () => {
