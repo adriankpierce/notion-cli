@@ -107,13 +107,14 @@ export function normalizeNotionId(input: string): string {
       throw new Error(`Invalid Notion URL: ${input}`);
     }
     const hostname = url.hostname.toLowerCase();
-    if (
-      hostname !== 'notion.so' &&
-      hostname !== 'notion.site' &&
-      !hostname.endsWith('.notion.so') &&
-      !hostname.endsWith('.notion.site')
-    ) {
-      throw new Error(`Expected a notion.so or notion.site URL, received ${url.hostname}.`);
+    const isNotionHost = hostname === 'notion.so'
+      || hostname === 'notion.site'
+      || hostname === 'notion.com'
+      || hostname.endsWith('.notion.so')
+      || hostname.endsWith('.notion.site')
+      || hostname.endsWith('.notion.com');
+    if (!isNotionHost) {
+      throw new Error(`Expected a Notion URL, received ${url.hostname}.`);
     }
     candidate = decodeURIComponent(url.pathname).replace(/\/$/, '').split('/').pop() ?? '';
   }

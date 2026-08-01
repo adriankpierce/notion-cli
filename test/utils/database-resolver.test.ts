@@ -54,11 +54,14 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
       expect(resolver.normalizeNotionId(
         'https://www.notion.so/acme/Tasks-2c98284a864381409380deaf158a1077?v=view-id',
       )).toBe('2c98284a-8643-8140-9380-deaf158a1077');
+      expect(resolver.normalizeNotionId(
+        'https://app.notion.com/p/2c98284a864381409380deaf158a1077?v=view-id',
+      )).toBe('2c98284a-8643-8140-9380-deaf158a1077');
     });
 
     it('rejects unrelated URLs and Notion URLs without an ID', () => {
       expect(() => resolver.normalizeNotionId('https://example.com/2c98284a864381409380deaf158a1077'))
-        .toThrow('notion.so or notion.site');
+        .toThrow('Expected a Notion URL');
       expect(() => resolver.normalizeNotionId('https://www.notion.so/acme/tasks'))
         .toThrow('Could not find a Notion ID');
     });

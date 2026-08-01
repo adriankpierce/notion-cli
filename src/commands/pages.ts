@@ -471,7 +471,8 @@ export function registerPagesCommand(program: Command): void {
     .command('edit <page_id>')
     .description('Edit page content using search-and-replace on the markdown. Uses Notion\'s update_content API.')
     .requiredOption('-s, --search <text>', 'Text to find in the page markdown (exact, case-sensitive)')
-    .requiredOption('-r, --replace <text>', 'Replacement text')
+    .option('-r, --replace <text>', 'Replacement text')
+    .option('--replace-file <path>', 'Read replacement text from a file (use - for stdin)')
     .option('--all', 'Replace all matches (default: must match exactly once)')
     .option('--allow-deleting-content', 'Allow deletion of child pages/databases')
     .option('--allow-temporary-media', 'Allow signed media URLs that may expire')
@@ -482,7 +483,14 @@ export function registerPagesCommand(program: Command): void {
       const client = getClient();
       const normalizedPageId = normalizeNotionId(pageId);
       if (options.search.length === 0) throw new Error('--search cannot be empty');
-      if (!options.allowTemporaryMedia && hasTemporaryNotionMediaUrl(options.replace)) {
+      if ((options.replace === undefined) === (options.replaceFile === undefined)) {
+        throw new Error('Pass exactly one of --replace or --replace-file.');
+      }
+      const replacement = options.replaceFile === undefined
+        ? options.replace
+        : readMarkdownInput(options.replaceFile);
+      if (replacement === undefined) throw new Error('--replace-file returned no replacement text.');
+      if (!options.allowTemporaryMedia && hasTemporaryNotionMediaUrl(replacement)) {
         throw new Error(
           'Refusing to insert a temporary signed media URL; download/re-upload the asset or ' +
           'pass --allow-temporary-media to accept an expiring link.',
@@ -504,7 +512,7 @@ export function registerPagesCommand(program: Command): void {
             dry_run: true,
             page_id: normalizedPageId,
             search: options.search,
-            replacement: options.replace,
+            replacement,
             replace_all_matches: options.all ?? false,
             match_count: matches,
             would_succeed: matches > 0 && (options.all || matches === 1),
@@ -512,7 +520,7 @@ export function registerPagesCommand(program: Command): void {
         } else {
           console.log(`Found ${matches} match(es) for search text`);
           console.log(`  Search:  "${options.search.slice(0, 80)}${options.search.length > 80 ? '...' : ''}"`);
-          console.log(`  Replace: "${options.replace.slice(0, 80)}${options.replace.length > 80 ? '...' : ''}"`);
+          console.log(`  Replace: "${replacement.slice(0, 80)}${replacement.length > 80 ? '...' : ''}"`);
         }
         if (!options.json) console.log('\nDry run - no changes made');
         return;
@@ -521,7 +529,7 @@ export function registerPagesCommand(program: Command): void {
       const response = await updatePageMarkdown(client, normalizedPageId, [
         {
           old_str: options.search,
-          new_str: options.replace,
+          new_str: replacement,
           replace_all_matches: options.all ?? false,
         },
       ], {

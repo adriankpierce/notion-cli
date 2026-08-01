@@ -988,6 +988,43 @@ describe('Pages Command', () => {
       });
     });
 
+    it('should read large replacement text from a file or stdin', async () => {
+      mockFS.set('replacement.md', '# Replacement\n\nFull body');
+      mockClient.patch.mockResolvedValue(mockUpdateResponse);
+
+      await program.parseAsync([
+        'node', 'test', 'page', 'edit', 'page-123',
+        '--search', '<unknown alt="tweet"/>',
+        '--replace-file', 'replacement.md',
+      ]);
+
+      expect(mockClient.patch).toHaveBeenCalledWith('pages/page-123/markdown', {
+        type: 'update_content',
+        update_content: {
+          content_updates: [{
+            old_str: '<unknown alt="tweet"/>',
+            new_str: '# Replacement\n\nFull body',
+            replace_all_matches: false,
+          }],
+          allow_deleting_content: false,
+        },
+      });
+    });
+
+    it('should require exactly one replacement source', async () => {
+      await expect(program.parseAsync([
+        'node', 'test', 'page', 'edit', 'page-123',
+        '--search', 'old',
+      ])).rejects.toThrow('exactly one');
+
+      await expect(program.parseAsync([
+        'node', 'test', 'page', 'edit', 'page-123',
+        '--search', 'old',
+        '--replace', 'new',
+        '--replace-file', 'replacement.md',
+      ])).rejects.toThrow('exactly one');
+    });
+
     it('should show dry run for edit', async () => {
       mockClient.get.mockResolvedValueOnce(existingMarkdown);
 
