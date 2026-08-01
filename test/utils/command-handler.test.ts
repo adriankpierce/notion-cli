@@ -1,52 +1,52 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { withErrorHandler } from '../../src/utils/command-handler.js';
+import { describe, expect, it, vi } from 'vitest';
+import { NotionApiError } from '../../src/client.js';
+import { formatCliError, withErrorHandler } from '../../src/utils/command-handler.js';
 
 describe('withErrorHandler', () => {
-  beforeEach(() => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-  });
-
-  it('should call the wrapped function with all arguments', async () => {
-    const fn = vi.fn();
+  it('calls the wrapped function with all arguments', async () => {
+    const fn = vi.fn().mockResolvedValue(undefined);
     const wrapped = withErrorHandler(fn);
+
     await wrapped('arg1', 'arg2', { opt: true });
+
     expect(fn).toHaveBeenCalledWith('arg1', 'arg2', { opt: true });
   });
 
-  it('should not catch when the function succeeds', async () => {
-    const fn = vi.fn().mockResolvedValue(undefined);
-    const wrapped = withErrorHandler(fn);
-    await wrapped();
-    expect(console.error).not.toHaveBeenCalled();
-    expect(process.exit).not.toHaveBeenCalled();
+  it('propagates action failures to the top-level command boundary', async () => {
+    const failure = new Error('test failure');
+    const wrapped = withErrorHandler(vi.fn().mockRejectedValue(failure));
+
+    await expect(wrapped()).rejects.toBe(failure);
   });
 
-  it('should catch errors and call console.error + process.exit(1)', async () => {
-    const fn = vi.fn().mockRejectedValue(new Error('test failure'));
-    const wrapped = withErrorHandler(fn);
-    await wrapped();
-    expect(console.error).toHaveBeenCalledWith('Error:', 'test failure');
-    expect(process.exit).toHaveBeenCalledWith(1);
+  it('preserves non-Error rejections', async () => {
+    const wrapped = withErrorHandler(vi.fn().mockRejectedValue('string failure'));
+
+    await expect(wrapped()).rejects.toBe('string failure');
+  });
+});
+
+describe('formatCliError', () => {
+  it('formats ordinary and non-Error failures deterministically', () => {
+    expect(formatCliError(new Error('ordinary failure'))).toBe('Error: ordinary failure');
+    expect(formatCliError('string failure')).toBe('Error: string failure');
   });
 
-  it('should handle non-Error throws gracefully', async () => {
-    const fn = vi.fn().mockRejectedValue('string error');
-    const wrapped = withErrorHandler(fn);
-    await wrapped();
-    expect(console.error).toHaveBeenCalledWith('Error:', undefined);
-    expect(process.exit).toHaveBeenCalledWith(1);
-  });
-
-  it('should preserve async behavior', async () => {
-    const order: number[] = [];
-    const fn = vi.fn(async () => {
-      order.push(1);
-      await Promise.resolve();
-      order.push(2);
+  it('preserves structured Notion diagnostics', () => {
+    const error = new NotionApiError('Invalid request', {
+      status: 400,
+      code: 'validation_error',
+      requestId: 'request-123',
+      additionalData: { property: 'Status' },
+      retryAfterSeconds: 2,
     });
-    const wrapped = withErrorHandler(fn);
-    await wrapped();
-    expect(order).toEqual([1, 2]);
+
+    expect(formatCliError(error)).toBe([
+      'Error: Notion API Error (400): Invalid request',
+      'Code: validation_error',
+      'Request ID: request-123',
+      'Additional data: {"property":"Status"}',
+      'Retry after: 2 second(s)',
+    ].join('\n'));
   });
 });

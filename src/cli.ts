@@ -1,55 +1,34 @@
 #!/usr/bin/env node
 /**
- * Notion CLI - Full-featured command line interface for Notion API
- * Built for humans AND AI agents
- * 
- * Usage:
- *   notion search "my query"
- *   notion page get <page_id>
- *   notion page create --parent <db_id> --title "New Page"
- *   notion db query <db_id> --filter-prop Status --filter-type equals --filter-value Done
- *   notion block append <page_id> --text "Hello world"
- *   notion comment create --page <page_id> --text "Great work!"
- *   notion user me
- *   notion export page <page_id> --obsidian
- *   notion export db <db_id> --vault ~/obsidian-vault
- *   notion batch --file operations.json
+ * Agent-oriented command line interface for Notion pages and data sources.
  */
 
 import { createRequire } from 'node:module';
 import { Command } from 'commander';
 import { initClient } from './client.js';
 import { setGlobalDataSourceId } from './utils/database-resolver.js';
+import { formatCliError } from './utils/command-handler.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json');
 import { registerSearchCommand } from './commands/search.js';
 import { registerPagesCommand } from './commands/pages.js';
 import { registerDatabasesCommand } from './commands/databases.js';
-import { registerBlocksCommand } from './commands/blocks.js';
 import { registerCommentsCommand } from './commands/comments.js';
-import { registerUsersCommand } from './commands/users.js';
-import { registerExportCommand } from './commands/export.js';
-import { registerBatchCommand } from './commands/batch.js';
-import { registerBulkCommand } from './commands/bulk.js';
-import { registerImportCommand } from './commands/import.js';
-import { registerTemplateCommand } from './commands/template.js';
-import { registerStatsCommand } from './commands/stats.js';
-import { registerDuplicateCommand } from './commands/duplicate.js';
-import { registerValidateCommand } from './commands/validate.js';
-import { registerBackupCommand } from './commands/backup.js';
-import { registerRelationsCommand } from './commands/relations.js';
 import { registerHelpAgentCommand } from './commands/help-agent.js';
 import { registerSkillCommand } from './commands/skill.js';
 import { registerFileCommand } from './commands/file.js';
+
+function collectQueryParam(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
 
 const program = new Command();
 
 program
   .name('notion')
-  .description('Full-featured CLI for Notion API - built for humans AND AI agents\n\n  AI Agents: Run "notion quickstart" for a complete quick reference guide')
+  .description('Agent-oriented CLI for Notion pages, Markdown, and data sources\n\n  Run "notion quickstart" for the core workflow')
   .version(version)
-  .option('--token <token>', 'Notion API token (or set NOTION_TOKEN env var)')
   .option('--data-source-id <id>', 'Explicit data source ID for multi-data-source databases')
   .hook('preAction', (thisCommand, actionCommand) => {
     // Skip auth for commands that don't need the Notion API
@@ -58,32 +37,16 @@ program
       return;
     }
     const opts = thisCommand.opts();
-    try {
-      initClient(opts.token);
-      setGlobalDataSourceId(opts.dataSourceId);
-    } catch (error) {
-      console.error('Error:', (error as Error).message);
-      process.exit(1);
-    }
+    initClient();
+    setGlobalDataSourceId(opts.dataSourceId);
   });
 
-// Register all commands
+// Keep the public surface focused on agent workflows. More specialized endpoint
+// access remains available through `notion api`.
 registerSearchCommand(program);
 registerPagesCommand(program);
 registerDatabasesCommand(program);
-registerBlocksCommand(program);
 registerCommentsCommand(program);
-registerUsersCommand(program);
-registerExportCommand(program);
-registerBatchCommand(program);
-registerBulkCommand(program);
-registerImportCommand(program);
-registerTemplateCommand(program);
-registerStatsCommand(program);
-registerDuplicateCommand(program);
-registerValidateCommand(program);
-registerBackupCommand(program);
-registerRelationsCommand(program);
 registerHelpAgentCommand(program);
 registerSkillCommand(program);
 registerFileCommand(program);
@@ -93,38 +56,50 @@ program
   .command('api <method> <path>')
   .description('Make a raw API request')
   .option('-d, --data <json>', 'Request body as JSON')
-  .option('-q, --query <params>', 'Query parameters as key=value,key=value')
+  .option('-q, --query <param>', 'Query parameter as key=value (repeatable)', collectQueryParam, [])
   .action(async (method: string, path: string, options) => {
-    try {
-      const { getClient } = await import('./client.js');
-      const client = getClient();
+    const { getClient } = await import('./client.js');
+    const client = getClient();
 
-      let body: Record<string, unknown> | undefined;
-      if (options.data) {
-        body = JSON.parse(options.data);
-      }
-
-      let query: Record<string, string> | undefined;
-      if (options.query) {
-        query = {};
-        for (const pair of options.query.split(',')) {
-          const [key, value] = pair.split('=');
-          if (key && value) query[key] = value;
-        }
-      }
-
-      const result = await client.request(path, {
-        method: method.toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'DELETE',
-        body,
-        query,
-      });
-
-      console.log(JSON.stringify(result, null, 2));
-    } catch (error) {
-      console.error('Error:', (error as Error).message);
-      process.exit(1);
+    let body: Record<string, unknown> | undefined;
+    if (options.data) {
+      body = JSON.parse(options.data);
     }
+
+    let query: Record<string, string | string[]> | undefined;
+    if (options.query.length > 0) {
+      query = {};
+      for (const pair of options.query as string[]) {
+        const separator = pair.indexOf('=');
+        if (separator <= 0) {
+          throw new Error(`Invalid query parameter: ${pair}`);
+        }
+        const key = pair.slice(0, separator);
+        const value = pair.slice(separator + 1);
+        const previous = query[key];
+        if (previous === undefined) query[key] = value;
+        else if (Array.isArray(previous)) previous.push(value);
+        else query[key] = [previous, value];
+      }
+    }
+
+    const normalizedMethod = method.toUpperCase();
+    if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(normalizedMethod)) {
+      throw new Error(`Unsupported HTTP method: ${method}`);
+    }
+
+    const result = await client.request(path, {
+      method: normalizedMethod as 'GET' | 'POST' | 'PATCH' | 'DELETE',
+      body,
+      query,
+    });
+
+    console.log(JSON.stringify(result, null, 2));
   });
 
-// Parse and execute
-program.parse();
+// Commander does not await asynchronous actions when parse() is used. Keeping a
+// single rejection boundary also prevents unhandled promise rejections.
+program.parseAsync().catch((error: unknown) => {
+  console.error(formatCliError(error));
+  process.exitCode = 1;
+});

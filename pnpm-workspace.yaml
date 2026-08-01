@@ -1,0 +1,6 @@
+allowBuilds:
+  esbuild: true
+overrides:
+  minimatch: '>=3.1.4'
+  rollup: '>=4.59.0'
+  flatted: '>=3.4.2'

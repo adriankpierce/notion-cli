@@ -39,7 +39,6 @@ describe('Comments Command', () => {
         block_id: 'page-123',
         page_size: 100,
       });
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('💬'));
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('This is a test comment.'));
     });
 
@@ -64,6 +63,14 @@ describe('Comments Command', () => {
       });
     });
 
+    it('should reject an invalid result limit', async () => {
+      await expect(program.parseAsync([
+        'node', 'test', 'comment', 'list', 'page-123', '--limit', '101',
+      ])).rejects.toThrow('--limit must be an integer between 1 and 100');
+
+      expect(mockClient.get).not.toHaveBeenCalled();
+    });
+
     it('should use cursor for pagination', async () => {
       mockClient.get.mockResolvedValue(mockCommentList);
 
@@ -76,6 +83,20 @@ describe('Comments Command', () => {
       });
     });
 
+    it('should normalize a Notion page URL', async () => {
+      mockClient.get.mockResolvedValue(mockCommentList);
+
+      await program.parseAsync([
+        'node', 'test', 'comment', 'list',
+        'https://www.notion.so/Page-2c98284a864381409380deaf158a1077',
+      ]);
+
+      expect(mockClient.get).toHaveBeenCalledWith('comments', {
+        block_id: '2c98284a-8643-8140-9380-deaf158a1077',
+        page_size: 100,
+      });
+    });
+
     it('should show pagination hint when has_more is true', async () => {
       const result = createPaginatedResult([mockComment], 'next-cursor-123', true);
 
@@ -83,7 +104,7 @@ describe('Comments Command', () => {
 
       await program.parseAsync(['node', 'test', 'comment', 'list', 'page-123']);
 
-      expect(console.log).toHaveBeenCalledWith(
+      expect(console.error).toHaveBeenCalledWith(
         'More results available. Use --cursor next-cursor-123'
       );
     });
@@ -113,7 +134,6 @@ describe('Comments Command', () => {
       await program.parseAsync(['node', 'test', 'comment', 'get', 'comment-123']);
 
       expect(mockClient.get).toHaveBeenCalledWith('comments/comment-123');
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('💬'));
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('This is a test comment.'));
     });
 
@@ -181,17 +201,39 @@ describe('Comments Command', () => {
       });
     });
 
+    it('should normalize a Notion page URL when creating a discussion', async () => {
+      mockClient.post.mockResolvedValue({ ...mockComment, id: 'new-comment-123' });
+
+      await program.parseAsync([
+        'node', 'test', 'comment', 'create',
+        '--page', 'https://www.notion.so/Page-2c98284a864381409380deaf158a1077',
+        '--text', 'My comment',
+      ]);
+
+      expect(mockClient.post).toHaveBeenCalledWith('comments', {
+        parent: { page_id: '2c98284a-8643-8140-9380-deaf158a1077' },
+        rich_text: [{ type: 'text', text: { content: 'My comment' } }],
+      });
+    });
+
     it('should error when neither --page nor --discussion is provided', async () => {
       await expect(
         program.parseAsync([
           'node', 'test', 'comment', 'create',
           '--text', 'My comment',
         ])
-      ).rejects.toThrow('process.exit(1)');
+      ).rejects.toThrow('Provide exactly one of --page or --discussion');
+    });
 
-      expect(console.error).toHaveBeenCalledWith(
-        'Error: Either --page or --discussion is required'
-      );
+    it('should error when both --page and --discussion are provided', async () => {
+      await expect(program.parseAsync([
+        'node', 'test', 'comment', 'create',
+        '--page', 'page-123',
+        '--discussion', 'disc-123',
+        '--text', 'Ambiguous target',
+      ])).rejects.toThrow('Provide exactly one of --page or --discussion');
+
+      expect(mockClient.post).not.toHaveBeenCalled();
     });
 
     it('should output JSON when --json flag is used', async () => {
@@ -219,9 +261,7 @@ describe('Comments Command', () => {
 
       await expect(
         program.parseAsync(['node', 'test', 'comment', 'list', 'invalid-page'])
-      ).rejects.toThrow('process.exit(1)');
-
-      expect(console.error).toHaveBeenCalledWith('Error:', 'Page not found');
+      ).rejects.toThrow('Page not found');
     });
 
     it('should handle API errors on get command', async () => {
@@ -229,9 +269,7 @@ describe('Comments Command', () => {
 
       await expect(
         program.parseAsync(['node', 'test', 'comment', 'get', 'invalid-id'])
-      ).rejects.toThrow('process.exit(1)');
-
-      expect(console.error).toHaveBeenCalledWith('Error:', 'Comment not found');
+      ).rejects.toThrow('Comment not found');
     });
 
     it('should handle API errors on create command', async () => {
@@ -243,9 +281,7 @@ describe('Comments Command', () => {
           '--page', 'page-123',
           '--text', 'My comment',
         ])
-      ).rejects.toThrow('process.exit(1)');
-
-      expect(console.error).toHaveBeenCalledWith('Error:', 'Permission denied');
+      ).rejects.toThrow('Permission denied');
     });
   });
 });

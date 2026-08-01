@@ -365,6 +365,7 @@ export function setupDatabaseResolution(
   const dataSourceResponse = {
     object: 'data_source' as const,
     id: dataSourceId,
+    parent: { type: 'database_id' as const, database_id: database.id },
     title: database.title,
     description: (database as any).description,
     properties: database.properties,

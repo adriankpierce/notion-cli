@@ -1,45 +1,28 @@
-# Notion CLI Skills
+# Notion CLI agent skill
 
-Agent skills for the Notion CLI, following the [AgentSkills](https://agentskills.dev) progressive disclosure spec.
+The `notion` skill teaches an agent the focused CLI workflow without loading a
+general Notion API manual into context.
 
-## Structure
-
-```
-skills/
-└── notion/                  # Core CLI skill
-    ├── SKILL.md
-    └── references/
-        ├── filters.md           # All property types × operators
-        └── batch-patterns.md    # Multi-op patterns for minimal tool calls
+```text
+skills/notion/
+├── SKILL.md
+└── references/
+    └── filters.md
 ```
 
-## Skill loading
+`SKILL.md` covers discovery, schema-aware data-source queries, page metadata and
+native Markdown, guarded edits and replacements, and file uploads. The filter
+reference is loaded only when a query needs operator-level detail.
 
-| Level | Content | Loaded |
-|-------|---------|--------|
-| `name` + `description` | Trigger metadata | Always in context |
-| `SKILL.md` body | Core workflow + commands | When skill triggers |
-| `references/*.md` | Deep reference material | On demand as needed |
-
-The main SKILL.md stays small. Agents only pull in filters/workflows/batch docs when those topics arise.
-
-## Installation
-
-### Claude Code / Cursor / other agents
-
-Add the skill path to your agent's context or system prompt. The `SKILL.md` files are self-contained.
-
-### OpenClaw
+The alpha package is not published to npm yet. Install the CLI from GitHub, then
+copy the bundled skill into a repository:
 
 ```bash
-cp -r skills/notion ~/.local/share/openclaw/skills/
-# or symlink:
-ln -s $(pwd)/skills/notion ~/.local/share/openclaw/skills/
+npm install --global github:adriankpierce/notion-cli-agent
+notion skill install /path/to/repository
 ```
 
-## Getting started
-
-1. Install the CLI: `npm install -g notion-cli-agent`
-2. Set token: `export NOTION_TOKEN="ntn_..."` or save to `~/.config/notion/api_key`
-3. Discover your workspace: `notion db list --compact`
-4. Start working: `notion page read <page_id>`, `notion page create --parent <db_id> --file doc.md`, etc.
+`skill install` writes `.claude/skills/notion` below the target directory. Other
+agent runtimes can consume [`notion/SKILL.md`](notion/SKILL.md) directly or copy
+the directory to their own skill location. Pass `--force` only when an existing
+installed copy should be replaced completely.

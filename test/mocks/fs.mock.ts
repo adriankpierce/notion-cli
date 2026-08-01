@@ -1,5 +1,3 @@
-import { vi } from 'vitest';
-
 interface MockFileSystem {
   [path: string]: string | Buffer;
 }
@@ -52,7 +50,7 @@ export function createMockFS(initialFiles: MockFileSystem = {}) {
       return fileStore.has(normalizedPath);
     },
 
-    mkdirSync: (path: string, options?: any): string => {
+    mkdirSync: (path: string, _options?: any): string => {
       const normalizedPath = normalizePath(path);
       // Store directories as empty strings
       fileStore.set(normalizedPath, '');

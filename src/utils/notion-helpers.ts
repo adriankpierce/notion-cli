@@ -2,46 +2,17 @@
  * Shared Notion API helper functions
  *
  * Exported functions:
- *   - fetchAllBlocks(client, blockId)           → Block[]   (paginated child block fetcher)
  *   - readPageMarkdown(client, pageId, opts?)   → PageMarkdownResponse (native markdown read)
  *   - writePageMarkdown(client, pageId, md)     → PageMarkdownResponse (native markdown write)
- *   - getPageTitle(page)                         → string    (extract title from page properties)
  *   - getDbTitle(db)                             → string    (extract title from database)
  *   - getDbDescription(db)                       → string    (extract description from database)
- *   - getPropertyValue(prop)                     → string | null  (property → display string)
- *   - getPropertyRawValue(prop, opts?)           → unknown   (property → raw value for frontmatter)
  *   - getParentDatabaseId(parent)               → string | undefined (extract DB/DS id from parent)
  *   - isParentDatabase(parent)                   → boolean (check if parent is a database/data_source)
  */
 
 import type { getClient } from '../client.js';
-import type { Block, Page, Database, PageMarkdownResponse, PaginatedResponse } from '../types/notion.js';
-
-// ─── Block Fetching ─────────────────────────────────────────────────────────
-
-/**
- * Fetch all child blocks of a given block/page, handling Notion's pagination.
- * Does NOT recurse into children — call recursively if you need the full tree.
- */
-export async function fetchAllBlocks(
-  client: ReturnType<typeof getClient>,
-  blockId: string
-): Promise<Block[]> {
-  const blocks: Block[] = [];
-  let cursor: string | undefined;
-
-  do {
-    const params = cursor ? `?start_cursor=${cursor}` : '';
-    const result = await client.get(
-      `blocks/${blockId}/children${params}`
-    ) as PaginatedResponse<Block>;
-
-    blocks.push(...result.results);
-    cursor = result.has_more ? result.next_cursor : undefined;
-  } while (cursor);
-
-  return blocks;
-}
+import { NotionApiError } from '../client.js';
+import type { Page, Database, PageMarkdownResponse, AsyncTask } from '../types/notion.js';
 
 // ─── Native Markdown API ────────────────────────────────────────────────────
 
@@ -71,15 +42,17 @@ export async function writePageMarkdown(
   client: ReturnType<typeof getClient>,
   pageId: string,
   markdown: string,
-  options?: { allowDeletingContent?: boolean },
+  options?: { allowDeletingContent?: boolean; allowAsync?: boolean },
 ): Promise<PageMarkdownResponse> {
-  return client.patch<PageMarkdownResponse>(`pages/${pageId}/markdown`, {
+  const response = await client.patch<PageMarkdownResponse | AsyncTask<PageMarkdownResponse>>(`pages/${pageId}/markdown`, {
     type: 'replace_content',
     replace_content: {
       new_str: markdown,
       allow_deleting_content: options?.allowDeletingContent ?? false,
     },
+    ...(options?.allowAsync ? { allow_async: true } : {}),
   });
+  return resolveAsyncResponse(client, response);
 }
 
 /**
@@ -99,31 +72,68 @@ export async function updatePageMarkdown(
   client: ReturnType<typeof getClient>,
   pageId: string,
   updates: { old_str: string; new_str: string; replace_all_matches?: boolean }[],
-  options?: { allowDeletingContent?: boolean },
+  options?: { allowDeletingContent?: boolean; allowAsync?: boolean },
 ): Promise<PageMarkdownResponse> {
-  return client.patch<PageMarkdownResponse>(`pages/${pageId}/markdown`, {
+  const response = await client.patch<PageMarkdownResponse | AsyncTask<PageMarkdownResponse>>(`pages/${pageId}/markdown`, {
     type: 'update_content',
     update_content: {
       content_updates: updates,
       allow_deleting_content: options?.allowDeletingContent ?? false,
     },
+    ...(options?.allowAsync ? { allow_async: true } : {}),
   });
+  return resolveAsyncResponse(client, response);
 }
 
-// ─── Title Extraction ───────────────────────────────────────────────────────
+/** Poll an async Notion operation and return its normal synchronous result. */
+export async function resolveAsyncResponse<T>(
+  client: ReturnType<typeof getClient>,
+  response: T | AsyncTask<T>,
+  options?: { timeoutMs?: number },
+): Promise<T> {
+  if (!isAsyncTask(response)) return response;
 
-/**
- * Extract the plain-text title from a Notion page's properties.
- * Returns 'Untitled' if no title property is found or it is empty.
- */
-export function getPageTitle(page: Page): string {
-  for (const value of Object.values(page.properties)) {
-    const prop = value as { type: string; title?: { plain_text: string }[] };
-    if (prop.type === 'title' && prop.title) {
-      return prop.title.map(t => t.plain_text).join('') || 'Untitled';
+  const timeoutMs = options?.timeoutMs ?? 5 * 60_000;
+  const deadline = Date.now() + timeoutMs;
+  let task = response;
+
+  while (task.status !== 'succeeded' && task.status !== 'failed') {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) throw new Error(`Timed out waiting for Notion async task ${task.id}`);
+
+    const pollAfterSeconds = task.poll_after_seconds ?? 1;
+    if (!Number.isFinite(pollAfterSeconds) || pollAfterSeconds < 0) {
+      throw new Error(`Notion async task ${task.id} returned an invalid polling interval`);
     }
+    const pollDelayMs = pollAfterSeconds * 1000;
+    if (pollDelayMs >= remainingMs) {
+      throw new Error(`Timed out waiting for Notion async task ${task.id}`);
+    }
+    if (pollDelayMs > 0) await new Promise(resolve => setTimeout(resolve, pollDelayMs));
+    task = await client.get<AsyncTask<T>>(`async_tasks/${task.id}`);
   }
-  return 'Untitled';
+
+  if (task.status === 'failed') {
+    const error = task.error;
+    throw new NotionApiError(error?.message || `Async task ${task.id} failed`, {
+      status: error?.status ?? 500,
+      code: error?.code,
+      additionalData: error?.additional_data,
+      requestId: error?.request_id,
+    });
+  }
+
+  if (task.result === undefined) {
+    throw new Error(`Notion async task ${task.id} succeeded without a result`);
+  }
+  return task.result;
+}
+
+function isAsyncTask<T>(response: T | AsyncTask<T>): response is AsyncTask<T> {
+  return typeof response === 'object'
+    && response !== null
+    && 'object' in response
+    && (response as { object?: unknown }).object === 'async_task';
 }
 
 /**
@@ -158,16 +168,25 @@ export function resolvePropertyName(
 
   const lowerInput = input.toLowerCase().trim();
 
-  // Case-insensitive match
-  for (const name of Object.keys(schema)) {
-    if (name.toLowerCase() === lowerInput) return name;
+  const caseInsensitiveMatches = Object.keys(schema)
+    .filter(name => name.toLowerCase() === lowerInput);
+  if (caseInsensitiveMatches.length === 1) return caseInsensitiveMatches[0];
+  if (caseInsensitiveMatches.length > 1) {
+    throw new Error(
+      `Property name "${input}" is ambiguous: ${caseInsensitiveMatches.join(', ')}. Use the exact name.`,
+    );
   }
 
-  // Normalized match (collapse whitespace, underscores → spaces)
+  // Normalized match (collapse whitespace and underscores to spaces).
   const normalizedInput = lowerInput.replace(/[_\s]+/g, ' ');
-  for (const name of Object.keys(schema)) {
-    const normalizedName = name.toLowerCase().replace(/[_\s]+/g, ' ').trim();
-    if (normalizedName === normalizedInput) return name;
+  const normalizedMatches = Object.keys(schema).filter((name) => {
+    return name.toLowerCase().replace(/[_\s]+/g, ' ').trim() === normalizedInput;
+  });
+  if (normalizedMatches.length === 1) return normalizedMatches[0];
+  if (normalizedMatches.length > 1) {
+    throw new Error(
+      `Property name "${input}" is ambiguous: ${normalizedMatches.join(', ')}. Use the exact name.`,
+    );
   }
 
   return null;
@@ -228,216 +247,4 @@ export function getParentDatabaseId(parent: Page['parent']): string | undefined 
  */
 export function buildTrashPayload(trash: boolean): Record<string, boolean> {
   return { in_trash: trash };
-}
-
-/**
- * Build the block positioning payload for the current API version.
- * v2026-03-11 uses `position: { after_block: id }` instead of `after: id`.
- * If no afterBlockId, returns empty (appends at end by default).
- */
-export function buildBlockPosition(afterBlockId?: string): Record<string, unknown> {
-  if (!afterBlockId) return {};
-  return { position: { after_block: afterBlockId } };
-}
-
-// ─── Property Value Extraction ──────────────────────────────────────────────
-
-/**
- * Convert a Notion property value object to a human-readable string.
- * Returns null for unsupported or empty property types.
- *
- * Handles: title, rich_text, select, status, multi_select, date, number,
- *          checkbox, url, email, phone_number, people, formula, rollup,
- *          files, relation, created_time, last_edited_time, created_by,
- *          last_edited_by.
- */
-export function getPropertyValue(prop: Record<string, unknown>): string | null {
-  const type = prop.type as string;
-  const data = prop[type];
-
-  switch (type) {
-    case 'title':
-    case 'rich_text':
-      return (
-        (data as { plain_text: string }[])
-          ?.map(t => t.plain_text)
-          .join('') || null
-      );
-    case 'select':
-    case 'status':
-      return (data as { name?: string })?.name || null;
-    case 'multi_select':
-      return (
-        (data as { name: string }[])?.map(s => s.name).join(', ') || null
-      );
-    case 'date': {
-      const dateData = data as { start?: string; end?: string } | null;
-      return dateData?.start || null;
-    }
-    case 'number':
-      return data != null ? String(data) : null;
-    case 'checkbox':
-      return data ? 'Yes' : 'No';
-    case 'url':
-    case 'email':
-    case 'phone_number':
-      return (data as string) || null;
-    case 'people':
-      return (
-        (data as { name?: string }[])
-          ?.map(p => p.name)
-          .filter(Boolean)
-          .join(', ') || null
-      );
-    case 'files':
-      return (
-        (data as { name?: string; file?: { url: string }; external?: { url: string } }[])
-          ?.map(f => f.file?.url || f.external?.url || f.name)
-          .filter(Boolean)
-          .join(', ') || null
-      );
-    case 'relation':
-      return (
-        (data as { id: string }[])
-          ?.map(r => r.id)
-          .join(', ') || null
-      );
-    case 'formula': {
-      const formula = data as { type: string; string?: string; number?: number; boolean?: boolean; date?: { start: string } } | null;
-      if (!formula) return null;
-      switch (formula.type) {
-        case 'string': return formula.string ?? null;
-        case 'number': return formula.number != null ? String(formula.number) : null;
-        case 'boolean': return formula.boolean != null ? String(formula.boolean) : null;
-        case 'date': return formula.date?.start ?? null;
-        default: return null;
-      }
-    }
-    case 'rollup': {
-      const rollup = data as { type: string; array?: unknown[]; number?: number; date?: { start: string } } | null;
-      if (!rollup) return null;
-      switch (rollup.type) {
-        case 'number': return rollup.number != null ? String(rollup.number) : null;
-        case 'date': return rollup.date?.start ?? null;
-        case 'array': return rollup.array ? JSON.stringify(rollup.array) : null;
-        default: return null;
-      }
-    }
-    case 'created_time':
-    case 'last_edited_time':
-      return (data as string) || null;
-    case 'created_by':
-    case 'last_edited_by':
-      return (data as { name?: string })?.name || null;
-    default:
-      return null;
-  }
-}
-
-/**
- * Options for getPropertyRawValue.
- */
-export interface PropertyRawValueOptions {
-  /**
-   * Custom formatter for rich text arrays (title, rich_text).
-   * When provided, used instead of plain_text concatenation.
-   * Typically set to richTextToMarkdown for markdown output.
-   */
-  richTextFormatter?: (richText: { plain_text: string }[]) => string;
-}
-
-/**
- * Convert a Notion property value to its raw representation, preserving
- * native types (numbers, booleans, arrays) instead of stringifying.
- *
- * Used for frontmatter generation where YAML needs typed values.
- * For display strings, use getPropertyValue() instead.
- *
- * Handles all Notion property types including formula, rollup, files,
- * relation, created_time, last_edited_time, created_by, last_edited_by.
- */
-export function getPropertyRawValue(
-  prop: Record<string, unknown>,
-  options?: PropertyRawValueOptions,
-): unknown {
-  const type = prop.type as string;
-  const data = prop[type];
-
-  switch (type) {
-    case 'title':
-    case 'rich_text':
-      if (options?.richTextFormatter) {
-        return options.richTextFormatter(data as { plain_text: string }[]) || null;
-      }
-      return (data as { plain_text: string }[])?.map(t => t.plain_text).join('') || null;
-
-    case 'number':
-      return data ?? null;
-
-    case 'select':
-    case 'status':
-      return (data as { name?: string })?.name || null;
-
-    case 'multi_select':
-      return (data as { name: string }[])?.map(s => s.name) || [];
-
-    case 'date': {
-      const dateData = data as { start?: string; end?: string } | null;
-      if (!dateData) return null;
-      return dateData.end ? `${dateData.start} - ${dateData.end}` : dateData.start || null;
-    }
-
-    case 'checkbox':
-      return data ?? null;
-
-    case 'url':
-    case 'email':
-    case 'phone_number':
-      return data || null;
-
-    case 'people':
-      return (data as { name?: string }[])?.map(p => p.name).filter(Boolean) || [];
-
-    case 'files':
-      return (data as { name?: string; file?: { url: string }; external?: { url: string } }[])?.map(f =>
-        f.file?.url || f.external?.url || f.name
-      ) || [];
-
-    case 'relation':
-      return (data as { id: string }[])?.map(r => r.id) || [];
-
-    case 'formula': {
-      const formula = data as { type: string; string?: string; number?: number; boolean?: boolean; date?: { start: string } } | null;
-      if (!formula) return null;
-      switch (formula.type) {
-        case 'string': return formula.string ?? null;
-        case 'number': return formula.number ?? null;
-        case 'boolean': return formula.boolean ?? null;
-        case 'date': return formula.date?.start ?? null;
-        default: return null;
-      }
-    }
-
-    case 'rollup': {
-      const rollup = data as { type: string; array?: unknown[]; number?: number; date?: { start: string } } | null;
-      if (!rollup) return null;
-      switch (rollup.type) {
-        case 'array': return rollup.array ?? null;
-        case 'number': return rollup.number ?? null;
-        case 'date': return rollup.date?.start ?? null;
-        default: return null;
-      }
-    }
-
-    case 'created_time':
-    case 'last_edited_time':
-      return data || null;
-
-    case 'created_by':
-    case 'last_edited_by':
-      return (data as { name?: string })?.name || null;
-
-    default:
-      return null;
-  }
 }

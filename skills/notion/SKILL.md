@@ -1,149 +1,190 @@
 ---
 name: notion
-description: Use the local Notion CLI to query, create, read, edit, and manage Notion pages and databases via shell. Use when interacting with Notion workspaces, querying databases, creating or updating pages, managing tasks, or running bulk/batch operations on Notion data. Prefer over Notion MCP or API calls.
+description: Use the local Notion CLI for schema-aware data-source queries and safe page metadata, property, native Markdown, comment, and file workflows. Use when an agent should work with Notion through deterministic shell commands and structured output.
 ---
 
-# notion
+# Notion CLI
 
-Local CLI for full Notion access.
+Use `notion` as a focused interface to Notion pages, native enhanced Markdown,
+and data sources. It intentionally does not expose general block CRUD.
 
-```bash
-notion <command> [options]   # globally installed via npm
-```
+Authentication comes from `NOTION_API_TOKEN`. A personal access token is a good
+fit for local user-owned workflows; an internal connection token is appropriate
+for stable bot-owned automation. Legacy `NOTION_TOKEN` and `NOTION_API_KEY` are
+accepted, as are the local config files documented in the project README. Never
+put a token in a command argument, prompt, log, or file in the repository.
 
-Auth: `NOTION_TOKEN` env var or `~/.config/notion/api_key`.
+## Start by resolving the data model
 
-## Discover
+A Notion database is a container. Its rows and schema belong to a data source.
+The CLI accepts a database ID or data-source ID and resolves the source when the
+database contains exactly one. For a multi-source database, add the global
+`--data-source-id <id>` option before the command.
 
-Before anything, find databases and understand their schemas.
-
-```bash
-notion db list                                  # all databases with IDs, descriptions, and property summaries
-notion db list --compact                        # just database names + IDs (one line each)
-notion db schema <db_id>                        # full schema: property names, types, valid select/status values
-```
-
-## Query & Search
-
-**`db query`** — precise filtering on a known database:
+Commands accept dashed UUIDs, compact UUIDs, and Notion page/database URLs.
 
 ```bash
-notion db query <db_id> --limit 10
-notion db query <db_id> --title "Exact Page Name"
-notion db query <db_id> --sort "Created time" --sort-dir desc --limit 5
-notion db query <db_id> \
-  --filter-prop "Status" --filter-type equals \
-  --filter-value "Done" --filter-prop-type status
+notion db list --compact
+notion db schema <database-or-source-id>
+notion --data-source-id <source-id> db schema <database-id>
 ```
 
-`--filter-prop-type` is required for non-text properties: `status` · `select` · `multi_select` · `number` · `date` · `checkbox` · `people` · `relation`. See `references/filters.md` for all operators.
+`db list` and `search` use Notion's eventually consistent title index. They are
+discovery tools, not exhaustive inventories or full-text search.
 
-**`search`** — workspace-wide keyword search (powered by Notion's search API, may miss long/common titles):
+## Query rows
+
+Use `db query`, never workspace search, to filter rows in a known data source.
 
 ```bash
-notion search "keyword" --limit 10
-notion search "keyword" --db <db_id>            # filter results to one database
-notion search "exact title" --exact --first     # client-side exact title match
+notion db query <database-or-source-id> --limit 20 --json
+notion db query <database-or-source-id> --title "Exact title" --json
+notion db query <database-or-source-id> --all --jsonl
+notion db query <database-or-source-id> \
+  --filter-prop Status --filter-type equals --filter-value Done
 ```
 
-**Use `db query --title` for exact lookups in a known database, not `search --exact`.**
-
-## Read
+The CLI loads the schema to determine the property type. Repeat each shorthand
+flag group to combine filters with `AND`. Omit `--filter-value` for operators
+such as `is_empty`, `is_not_empty`, and relative-date operators.
 
 ```bash
-notion page read <page_id>                      # page content as markdown
-notion page read <page_id> -o page.md           # save to file
-notion page get <page_id>                       # page properties only
-notion page get <page_id> --content             # properties + content blocks
+notion db query <source-id> \
+  --filter-prop Status --filter-type does_not_equal --filter-value Done \
+  --filter-prop Assignee --filter-type is_empty \
+  --filter-properties Name --filter-properties Status --json
 ```
 
-## Create
+Use repeated `--filter '<json>'` for advanced Notion filter objects. Read
+`references/filters.md` before constructing a property filter whose operator or
+type is uncertain.
+
+Use `--all` for complete row traversal and `--jsonl` for one returned row object
+per line. The CLI stages JSONL in a private temporary file until row-query
+completeness is known. If Notion marks a query incomplete at its 10,000-result
+limit, the CLI fails without emitting a partial stream. Narrow the filter into
+non-overlapping time windows; do not treat a partial set as complete.
+
+Row pagination does not fully hydrate every property. Notion can truncate
+inline title, rich-text, people, relation, formula, and rollup values. Inspect
+property metadata such as `has_more`; when a complete value matters, run
+`notion page property <page-id> <property-id> --all --json`.
+
+## Read pages
+
+Choose the smallest operation that supplies the needed data:
 
 ```bash
-notion page create --parent <db_id> --title "Meeting Notes" --file notes.md
-notion page create --parent <db_id> --title "Task" \
-  --prop "Status:status=Todo" --prop "Priority:select=High"
-notion page create --parent <page_id> --parent-type page --title "Subpage"
+notion page get <page-id> --json                 # metadata and properties
+notion page property <page-id> <property-id> --all --json
+notion page read <page-id>                       # verbatim Markdown on stdout
+notion page read <page-id> --json                # native response metadata
+notion page read <page-id> --include-transcript -o page.md
 ```
 
-If `--title` is omitted, Notion extracts the first `# h1` heading as the title.
+Use `page property --all` for a complete potentially paginated property value.
+Markdown reads fail before output when truncated or unknown by default; pass
+`--allow-incomplete` only when partial content is explicitly acceptable.
+Meeting-note transcripts require `--include-transcript`.
 
-## Update
+## Create pages
 
-**Properties:**
+Provide Markdown through `--file`, `--file -`, or piped stdin:
 
 ```bash
-notion page update <page_id> --prop "Status:status=Done"
-notion page update <page_id> --title "New Title"
-notion page update <page_id> --clear-prop "Assignee"
-notion page update <page_id> --icon 🚀
+notion page create --parent <database-id> --title "Meeting notes" --file notes.md
+printf '# Body\n' | notion page create --parent <database-id> --title "New page"
+notion page create --parent <page-id> --parent-type page --title "Child page"
 ```
 
-**Content (search-and-replace):**
+For database-backed pages, untyped `--prop 'Name=value'` values are resolved
+from the schema. An explicit `Name:type=value` overrides it. Prefer schema-backed
+values; use `Name:json=<complete-property-json>` only as an API-level escape
+hatch.
 
 ```bash
-notion page edit <page_id> --search "old text" --replace "new text"
-notion page edit <page_id> --search "typo" --replace "fixed" --all    # all matches
-notion page edit <page_id> --search "old" --replace "new" --dry-run   # preview
+notion page create --parent <database-id> --title "Task" \
+  --prop "Status=Todo" --prop "Priority=High"
 ```
 
-Search is exact and case-sensitive. Must match exactly once unless `--all` is used.
+## Update pages safely
+
+Update properties independently from the body:
+
+```bash
+notion page update <page-id> --prop "Status=Done"
+notion page update <page-id> --clear-prop Assignee
+notion page update <page-id> --title "New title"
+```
+
+Prefer a targeted native Markdown edit and preview it first:
+
+```bash
+notion page edit <page-id> --search "old text" --replace "new text" --dry-run
+notion page edit <page-id> --search "old text" --replace "new text"
+```
+
+Search is exact and case-sensitive. Use `--all` only after confirming that every
+match should change.
+
+Full replacement is destructive and should be used only when the complete
+desired body is known:
+
+```bash
+notion page replace <page-id> --file replacement.md
+printf '# Replacement\n' | notion page replace <page-id>
+```
+
+Child pages and databases are protected unless
+`--allow-deleting-content` is explicitly passed. Do not pass it without user
+authorization and an understanding of what will be removed. `--async` is
+available for large create, edit, and replace operations; the CLI waits for the
+Notion task result.
+
+Notion Markdown can contain temporary signed media URLs. Markdown writes reject
+those URLs by default because copying them creates future broken links. Download
+and re-upload durable assets; use `--allow-temporary-media` only with explicit
+acceptance of expiry.
 
 ## Files
 
-```bash
-notion file upload <page_id> photo.jpg                          # local file
-notion file upload <page_id> --url https://example.com/doc.pdf  # from URL
-notion file upload <page_id> photo.jpg --caption "Vacation" --position top
-```
-
-Block type auto-detected from extension (image, video, audio, pdf, or generic file).
-
-## Batch & Bulk
-
-**`batch`** — multiple operations in one command. Uses raw Notion API property format:
+Publicly hosted media can be inserted through enhanced Markdown. Private local
+files require Notion's upload lifecycle and an internal attachment step:
 
 ```bash
-notion batch --dry-run --data '[
-  {"op":"get","type":"page","id":"<page_id>"},
-  {"op":"create","type":"page","parent":"<db_id>","data":{"properties":{"Name":{"title":[{"text":{"content":"New"}}]}}}},
-  {"op":"update","type":"page","id":"<id>","data":{"properties":{"Status":{"status":{"name":"Done"}}}}}
-]'
-notion batch --data '[...]'                     # execute (remove --dry-run)
+notion file upload <page-id> diagram.png --caption "Architecture"
+notion file upload <page-id> --url https://example.com/report.pdf
 ```
 
-See `references/batch-patterns.md` for all operation types and patterns.
+Local uploads above 20 MiB are rejected until multipart upload is implemented.
+For integration tokens, the CLI also enforces the bot workspace limit when it
+is reported. Personal access tokens do not expose that value through the
+current-user response, so Notion enforces any lower limit at upload creation.
+Do not retain Notion-hosted response URLs as permanent asset URLs; they expire.
 
-**`bulk`** — mass updates with simple filter syntax:
+## Comments
 
 ```bash
-notion bulk update <db_id> --where "Status=Todo" --set "Status=In Progress" --dry-run
-notion bulk archive <db_id> --where "Status=Done" --dry-run
+notion comment list <page-id> --json
+notion comment create --page <page-id> --text "Please review this section."
 ```
 
-## Property syntax
+Comments are page-oriented review metadata; they do not expose general block
+editing.
 
-`--prop` auto-detects plain strings as `select`. Use `Key:type=Value` to force a type:
+## Output and failure rules
 
-```bash
---prop "Status:status=Done"        # status (not select)
---prop "Notes:rich_text=Some text" # rich_text (not select)
---prop "Owner:people=<user_id>"    # people
-```
+- Prefer `--json` for metadata, queries, properties, and mutation results.
+- Treat stdout as data and stderr as diagnostics.
+- A nonzero status means the workflow did not complete safely.
+- Do not discard `truncated`, `unknown_block_ids`, `request_status`, cursors, or
+  partial-operation errors.
+- Inspect schema before writing select/status values; names are case-sensitive.
+- Use `notion <command> --help` when an option is not shown here.
+- For low-level endpoints, prefer the official `ntn api`; use `notion api` only
+  when the focused CLI must provide the transport.
 
-## Output
+## Reference
 
-Default output is compact and structured. Use `--json` for raw Notion API JSON.
-
-## Rules
-
-- Property values are **case-sensitive** — verify exact values with `db schema`
-- Title property name varies per database (`"Name"`, `"Task"`, etc. — check schema)
-- Use `--clear-prop` to clear properties, not empty values like `Owner:people=`
-- Always `--dry-run` before any bulk/batch write
-- Confirm with user before destructive bulk operations
-
-## References
-
-- `references/filters.md` — all property types × filter operators with examples
-- `references/batch-patterns.md` — batch operation types and patterns
+- `references/filters.md` — property types, filter operators, repeated filters,
+  and raw filter escape hatches

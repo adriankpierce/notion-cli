@@ -5,6 +5,7 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { formatOutput } from '../utils/format.js';
 import { withErrorHandler } from '../utils/command-handler.js';
+import { normalizeNotionId } from '../utils/database-resolver.js';
 import type { PaginatedResponse } from '../types/notion.js';
 
 interface Comment {
@@ -15,24 +16,32 @@ interface Comment {
   rich_text: Array<{ plain_text: string }>;
 }
 
+function pageSize(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+    throw new Error('--limit must be an integer between 1 and 100.');
+  }
+  return parsed;
+}
+
 export function registerCommentsCommand(program: Command): void {
   const comments = program
     .command('comment')
     .alias('comments')
-    .description('Manage comments on pages and blocks');
+    .description('Manage comments on pages');
 
   // List comments
   comments
-    .command('list <block_id>')
-    .description('List comments on a page or block')
+    .command('list <page_id>')
+    .description('List comments on a page')
     .option('-l, --limit <number>', 'Max results', '100')
     .option('--cursor <cursor>', 'Pagination cursor')
     .option('-j, --json', 'Output raw JSON')
-    .action(withErrorHandler(async (blockId: string, options) => {
+    .action(withErrorHandler(async (pageId: string, options) => {
       const client = getClient();
 
-      const query: Record<string, string | number> = { block_id: blockId };
-      if (options.limit) query.page_size = parseInt(options.limit, 10);
+      const query: Record<string, string | number> = { block_id: normalizeNotionId(pageId) };
+      if (options.limit) query.page_size = pageSize(options.limit);
       if (options.cursor) query.start_cursor = options.cursor;
 
       const result = await client.get('comments', query) as PaginatedResponse<Comment>;
@@ -50,14 +59,14 @@ export function registerCommentsCommand(program: Command): void {
       for (const comment of result.results) {
         const text = comment.rich_text.map(t => t.plain_text).join('');
         const date = new Date(comment.created_time).toLocaleString();
-        console.log(`💬 ${text}`);
+        console.log(text);
         console.log(`   ID: ${comment.id}`);
         console.log(`   Date: ${date}`);
         console.log('');
       }
 
       if (result.has_more) {
-        console.log(`More results available. Use --cursor ${result.next_cursor}`);
+        console.error(`More results available. Use --cursor ${result.next_cursor}`);
       }
     }));
 
@@ -74,7 +83,7 @@ export function registerCommentsCommand(program: Command): void {
         console.log(formatOutput(comment));
       } else {
         const text = comment.rich_text.map(t => t.plain_text).join('');
-        console.log(`💬 ${text}`);
+        console.log(text);
         console.log(`ID: ${comment.id}`);
         console.log(`Discussion: ${comment.discussion_id}`);
         console.log(`Date: ${new Date(comment.created_time).toLocaleString()}`);
@@ -90,9 +99,8 @@ export function registerCommentsCommand(program: Command): void {
     .requiredOption('-t, --text <text>', 'Comment text')
     .option('-j, --json', 'Output raw JSON')
     .action(withErrorHandler(async (options) => {
-      if (!options.page && !options.discussion) {
-        console.error('Error: Either --page or --discussion is required');
-        process.exit(1);
+      if (Boolean(options.page) === Boolean(options.discussion)) {
+        throw new Error('Provide exactly one of --page or --discussion.');
       }
 
       const client = getClient();
@@ -102,7 +110,7 @@ export function registerCommentsCommand(program: Command): void {
       };
 
       if (options.page) {
-        body.parent = { page_id: options.page };
+        body.parent = { page_id: normalizeNotionId(options.page) };
       } else if (options.discussion) {
         body.discussion_id = options.discussion;
       }

@@ -3,7 +3,6 @@ import {
   formatOutput,
   formatPageTitle,
   formatDatabaseTitle,
-  formatBlock,
   parseProperties,
   parseFilter,
 } from '../../src/utils/format';
@@ -131,662 +130,179 @@ describe('Format Utilities', () => {
     });
   });
 
-  describe('formatBlock()', () => {
-    it('should format paragraph block', () => {
-      const block = {
-        id: 'block-123456789',
-        type: 'paragraph',
-        paragraph: {
-          rich_text: [{ plain_text: 'This is a paragraph.' }],
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('¶');
-      expect(result).toContain('This is a paragraph.');
-      expect(result).toContain('(block-12...)');
-    });
-
-    it('should format heading blocks', () => {
-      const h1 = {
-        id: 'h1-123456789',
-        type: 'heading_1',
-        heading_1: {
-          rich_text: [{ plain_text: 'Heading 1' }],
-        },
-      };
-      const result = formatBlock(h1);
-      expect(result).toContain('H1');
-      expect(result).toContain('Heading 1');
-    });
-
-    it('should format code block with language', () => {
-      const block = {
-        id: 'code-123456789',
-        type: 'code',
-        code: {
-          language: 'javascript',
-          rich_text: [{ plain_text: 'console.log("hello");' }],
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('`');
-      expect(result).toContain('[javascript]');
-      expect(result).toContain('console.log("hello");');
-    });
-
-    it('should format code block without language', () => {
-      const block = {
-        id: 'code-123456789',
-        type: 'code',
-        code: {
-          rich_text: [{ plain_text: 'plain text' }],
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('[plain text]');
-    });
-
-    it('should format bulleted list item', () => {
-      const block = {
-        id: 'list-123456789',
-        type: 'bulleted_list_item',
-        bulleted_list_item: {
-          rich_text: [{ plain_text: 'Item 1' }],
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('•');
-      expect(result).toContain('Item 1');
-    });
-
-    it('should format numbered list item', () => {
-      const block = {
-        id: 'list-123456789',
-        type: 'numbered_list_item',
-        numbered_list_item: {
-          rich_text: [{ plain_text: 'Item 1' }],
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('#');
-      expect(result).toContain('Item 1');
-    });
-
-    it('should format to-do block', () => {
-      const block = {
-        id: 'todo-123456789',
-        type: 'to_do',
-        to_do: {
-          rich_text: [{ plain_text: 'Task to do' }],
-          checked: false,
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('☐');
-      expect(result).toContain('Task to do');
-    });
-
-    it('should format divider', () => {
-      const block = {
-        id: 'div-123456789',
-        type: 'divider',
-        divider: {},
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('—');
-      expect(result).toContain('---');
-    });
-
-    it('should format image block with URL', () => {
-      const block = {
-        id: 'img-123456789',
-        type: 'image',
-        image: {
-          url: 'https://example.com/image.jpg',
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('[img]');
-      expect(result).toContain('https://example.com/image.jpg');
-    });
-
-    it('should format image block with caption fallback', () => {
-      const block = {
-        id: 'img-123456789',
-        type: 'image',
-        image: {
-          caption: [{ plain_text: 'My Image' }],
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('[img]');
-      expect(result).toContain('My Image');
-    });
-
-    it('should format video block', () => {
-      const block = {
-        id: 'vid-123456789',
-        type: 'video',
-        video: {
-          url: 'https://example.com/video.mp4',
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('[vid]');
-      expect(result).toContain('https://example.com/video.mp4');
-    });
-
-    it('should format file block', () => {
-      const block = {
-        id: 'file-123456789',
-        type: 'file',
-        file: {
-          url: 'https://example.com/file.pdf',
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('[file]');
-      expect(result).toContain('https://example.com/file.pdf');
-    });
-
-    it('should format PDF block', () => {
-      const block = {
-        id: 'pdf-123456789',
-        type: 'pdf',
-        pdf: {
-          url: 'https://example.com/doc.pdf',
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('[pdf]');
-      expect(result).toContain('https://example.com/doc.pdf');
-    });
-
-    it('should format embed block', () => {
-      const block = {
-        id: 'embed-123456789',
-        type: 'embed',
-        embed: {
-          url: 'https://example.com/embed',
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('[embed]');
-      expect(result).toContain('https://example.com/embed');
-    });
-
-    it('should format bookmark block', () => {
-      const block = {
-        id: 'bm-123456789',
-        type: 'bookmark',
-        bookmark: {
-          url: 'https://example.com',
-        },
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('[bm]');
-      expect(result).toContain('https://example.com');
-    });
-
-    it('should handle blocks with no content', () => {
-      const block = {
-        id: 'empty-123456789',
-        type: 'paragraph',
-        paragraph: {},
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('¶');
-      expect(result).toContain('(empty-12...)');
-    });
-
-    it('should handle unknown block types', () => {
-      const block = {
-        id: 'unknown-123456789',
-        type: 'unknown_type',
-      };
-      const result = formatBlock(block);
-      expect(result).toContain('?');
-      expect(result).toContain('[unknown_type]');
-    });
-  });
-
   describe('parseProperties()', () => {
-    it('should parse text properties as select', () => {
-      const props = ['Status=In Progress'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Status: { select: { name: 'In Progress' } },
-      });
-    });
+    const schema = {
+      Name: { type: 'title' },
+      Status: { type: 'status' },
+      Notes: { type: 'rich_text' },
+      Count: { type: 'number' },
+      Done: { type: 'checkbox' },
+      Due: { type: 'date' },
+      Tags: { type: 'multi_select' },
+      Owner: { type: 'people' },
+    };
 
-    it('should parse number properties (integer)', () => {
-      const props = ['Count=42'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Count: { number: 42 },
-      });
-    });
-
-    it('should parse number properties (float)', () => {
-      const props = ['Score=98.5'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Score: { number: 98.5 },
-      });
-    });
-
-    it('should parse checkbox properties (true)', () => {
-      const props = ['Done=true'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Done: { checkbox: true },
-      });
-    });
-
-    it('should parse checkbox properties (false)', () => {
-      const props = ['Done=false'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Done: { checkbox: false },
-      });
-    });
-
-    it('should parse date properties', () => {
-      const props = ['DueDate=2024-12-31'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        DueDate: { date: { start: '2024-12-31' } },
-      });
-    });
-
-    it('should parse date with time', () => {
-      const props = ['DueDate=2024-12-31T14:30:00'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        DueDate: { date: { start: '2024-12-31T14:30:00' } },
-      });
-    });
-
-    it('should parse URL properties (http)', () => {
-      const props = ['Website=http://example.com'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Website: { url: 'http://example.com' },
-      });
-    });
-
-    it('should parse URL properties (https)', () => {
-      const props = ['Website=https://example.com'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Website: { url: 'https://example.com' },
-      });
-    });
-
-    it('should parse email properties', () => {
-      const props = ['Contact=user@example.com'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Contact: { email: 'user@example.com' },
-      });
-    });
-
-    it('should parse multi-select properties', () => {
-      const props = ['Tags=bug,urgent,frontend'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Tags: {
-          multi_select: [
-            { name: 'bug' },
-            { name: 'urgent' },
-            { name: 'frontend' },
-          ],
-        },
-      });
-    });
-
-    it('should trim whitespace in multi-select', () => {
-      const props = ['Tags=bug, urgent, frontend'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Tags: {
-          multi_select: [
-            { name: 'bug' },
-            { name: 'urgent' },
-            { name: 'frontend' },
-          ],
-        },
-      });
-    });
-
-    it('should parse JSON properties', () => {
-      const props = ['Data={"key":"value"}'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Data: { key: 'value' },
-      });
-    });
-
-    it('should parse JSON array properties', () => {
-      const props = ['Items=[1,2,3]'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Items: [1, 2, 3],
-      });
-    });
-
-    it('should fallback to rich_text for invalid JSON', () => {
-      const props = ['Data={invalid json}'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Data: { rich_text: [{ text: { content: '{invalid json}' } }] },
-      });
-    });
-
-    it('should skip properties without = sign', () => {
-      const props = ['InvalidProperty', 'Valid=123'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Valid: { number: 123 },
-      });
-    });
-
-    it('should parse multiple properties', () => {
-      const props = [
-        'Status=In Progress',
+    it('uses schema types rather than guessing from value shapes', () => {
+      expect(parseProperties([
+        'Name=123',
+        'Status=Done',
+        'Notes=Hello, World!',
         'Count=42',
-        'Done=true',
-        'Tags=bug,urgent',
-      ];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Status: { select: { name: 'In Progress' } },
+        'Done=false',
+        'Due=2026-08-01',
+        'Tags=bug, urgent',
+        'Owner=user-1,user-2',
+      ], schema)).toEqual({
+        Name: { title: [{ text: { content: '123' } }] },
+        Status: { status: { name: 'Done' } },
+        Notes: { rich_text: [{ text: { content: 'Hello, World!' } }] },
         Count: { number: 42 },
-        Done: { checkbox: true },
-        Tags: {
-          multi_select: [{ name: 'bug' }, { name: 'urgent' }],
-        },
+        Done: { checkbox: false },
+        Due: { date: { start: '2026-08-01' } },
+        Tags: { multi_select: [{ name: 'bug' }, { name: 'urgent' }] },
+        Owner: { people: [{ id: 'user-1' }, { id: 'user-2' }] },
       });
     });
 
-    it('should handle property values with special characters', () => {
-      const props = ['Title=Hello, World!'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Title: {
-          multi_select: [{ name: 'Hello' }, { name: 'World!' }],
-        },
+    it('lets an explicit type hint override the schema', () => {
+      expect(parseProperties(['Status:select=Done'], schema)).toEqual({
+        Status: { select: { name: 'Done' } },
       });
     });
 
-    it('should parse status property with type hint syntax', () => {
-      const props = ['Status:status=Done'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
+    it('requires a schema or explicit type instead of guessing', () => {
+      expect(() => parseProperties(['Status=Done'])).toThrow('without a schema');
+      expect(() => parseProperties(['Notes=hello, world'])).toThrow('without a schema');
+    });
+
+    it('allows an explicit raw JSON property value without a schema', () => {
+      expect(parseProperties(['Status={"status":{"name":"Done"}}'])).toEqual({
         Status: { status: { name: 'Done' } },
       });
     });
 
-    it('should parse rich_text with type hint syntax', () => {
-      const props = ['Notes:rich_text=Some notes here'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Notes: { rich_text: [{ text: { content: 'Some notes here' } }] },
+    it('allows an explicit :json escape hatch even when a schema is present', () => {
+      expect(parseProperties(['Due:json={"date":{"start":"2026-08-01","end":"2026-08-02"}}'], schema))
+        .toEqual({ Due: { date: { start: '2026-08-01', end: '2026-08-02' } } });
+    });
+
+    it('preserves schema property names that contain a colon', () => {
+      const colonSchema = { 'CRM: Status': { type: 'status' } };
+      expect(parseProperties(['CRM: Status=Qualified'], colonSchema)).toEqual({
+        'CRM: Status': { status: { name: 'Qualified' } },
       });
     });
 
-    it('should parse people type hint (pass-through as relation-like)', () => {
-      const props = ['Assignee:people=user-123'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Assignee: { people: [{ id: 'user-123' }] },
-      });
-    });
-
-    it('should handle type hint with no colon (backwards compat)', () => {
-      const props = ['Status=In Progress'];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Status: { select: { name: 'In Progress' } },
-      });
-    });
-
-    it('should handle empty property value', () => {
-      const props = ['Empty='];
-      const result = parseProperties(props);
-      expect(result).toEqual({
-        Empty: { select: { name: '' } },
-      });
+    it('rejects malformed input, invalid scalar values, and read-only fields', () => {
+      expect(() => parseProperties(['Missing'], schema)).toThrow('Expected Name[:type]=value');
+      expect(() => parseProperties(['Unknown=value'], schema)).toThrow('does not exist');
+      expect(() => parseProperties(['Count=NaN'], schema)).toThrow('finite number');
+      expect(() => parseProperties(['Count='], schema)).toThrow('--clear-prop');
+      expect(() => parseProperties(['Status='], schema)).toThrow('--clear-prop');
+      expect(() => parseProperties(['Done=yes'], schema)).toThrow('true');
+      expect(() => parseProperties(['Total=formula'], { Total: { type: 'formula' } })).toThrow('read-only');
     });
   });
 
   describe('parseFilter()', () => {
-    describe('Explicit property type', () => {
-      it('should create status filter', () => {
-        const filter = parseFilter('Status', 'equals', 'Done', 'status');
-        expect(filter).toEqual({
-          property: 'Status',
-          status: { equals: 'Done' },
-        });
-      });
+    const schema = {
+      Name: { type: 'title' },
+      Status: { type: 'status' },
+      Priority: { type: 'select' },
+      Notes: { type: 'rich_text' },
+      Count: { type: 'number' },
+      Done: { type: 'checkbox' },
+      Due: { type: 'date' },
+      Website: { type: 'url' },
+      Email: { type: 'email' },
+      Phone: { type: 'phone_number' },
+      Created: { type: 'created_time' },
+      Editor: { type: 'last_edited_by' },
+      ID: { type: 'unique_id' },
+    };
 
-      it('should create select filter', () => {
-        const filter = parseFilter('Priority', 'equals', 'High', 'select');
-        expect(filter).toEqual({
-          property: 'Priority',
-          select: { equals: 'High' },
-        });
-      });
-
-      it('should create multi_select filter', () => {
-        const filter = parseFilter('Tags', 'contains', 'bug', 'multi_select');
-        expect(filter).toEqual({
-          property: 'Tags',
-          multi_select: { contains: 'bug' },
-        });
-      });
-
-      it('should create rich_text filter', () => {
-        const filter = parseFilter('Name', 'contains', 'test', 'rich_text');
-        expect(filter).toEqual({
-          property: 'Name',
-          rich_text: { contains: 'test' },
-        });
-      });
-
-      it('should create text filter', () => {
-        const filter = parseFilter('Name', 'contains', 'test', 'text');
-        expect(filter).toEqual({
-          property: 'Name',
-          rich_text: { contains: 'test' },
-        });
-      });
-
-      it('should create number filter', () => {
-        const filter = parseFilter('Count', 'greater_than', '10', 'number');
-        expect(filter).toEqual({
-          property: 'Count',
-          number: { greater_than: 10 },
-        });
-      });
-
-      it('should create checkbox filter (true)', () => {
-        const filter = parseFilter('Done', 'equals', 'true', 'checkbox');
-        expect(filter).toEqual({
-          property: 'Done',
-          checkbox: { equals: true },
-        });
-      });
-
-      it('should create checkbox filter (false)', () => {
-        const filter = parseFilter('Done', 'equals', 'false', 'checkbox');
-        expect(filter).toEqual({
-          property: 'Done',
-          checkbox: { equals: false },
-        });
-      });
-
-      it('should create date filter', () => {
-        const filter = parseFilter('DueDate', 'on_or_after', '2024-01-01', 'date');
-        expect(filter).toEqual({
-          property: 'DueDate',
-          date: { on_or_after: '2024-01-01' },
-        });
-      });
-
-      it('should handle unknown property types', () => {
-        const filter = parseFilter('Custom', 'equals', 'value', 'custom_type');
-        expect(filter).toEqual({
-          property: 'Custom',
-          custom_type: { equals: 'value' },
-        });
+    it('uses status rather than select for a schema-backed status', () => {
+      expect(parseFilter('Status', 'equals', 'Done', undefined, schema)).toEqual({
+        property: 'Status',
+        status: { equals: 'Done' },
       });
     });
 
-    describe('Auto-detection from value', () => {
-      it('should auto-detect boolean values', () => {
-        const filter1 = parseFilter('Done', 'equals', 'true');
-        expect(filter1).toEqual({
-          property: 'Done',
-          checkbox: { equals: true },
-        });
-
-        const filter2 = parseFilter('Done', 'equals', 'false');
-        expect(filter2).toEqual({
-          property: 'Done',
-          checkbox: { equals: false },
-        });
+    it('maps title and URL properties to their correct filter families', () => {
+      expect(parseFilter('Name', 'contains', 'Roadmap', undefined, schema)).toEqual({
+        property: 'Name',
+        title: { contains: 'Roadmap' },
       });
-
-      it('should auto-detect number values (integer)', () => {
-        const filter = parseFilter('Count', 'greater_than', '42');
-        expect(filter).toEqual({
-          property: 'Count',
-          number: { greater_than: 42 },
-        });
-      });
-
-      it('should auto-detect number values (float)', () => {
-        const filter = parseFilter('Score', 'less_than', '98.5');
-        expect(filter).toEqual({
-          property: 'Score',
-          number: { less_than: 98.5 },
-        });
-      });
-
-      it('should auto-detect date values', () => {
-        const filter = parseFilter('DueDate', 'on_or_before', '2024-12-31');
-        expect(filter).toEqual({
-          property: 'DueDate',
-          date: { on_or_before: '2024-12-31' },
-        });
-      });
-
-      it('should auto-detect date values with time', () => {
-        const filter = parseFilter('CreatedAt', 'after', '2024-01-01T10:00:00');
-        expect(filter).toEqual({
-          property: 'CreatedAt',
-          date: { after: '2024-01-01T10:00:00' },
-        });
-      });
-
-      it('should default to select for text values', () => {
-        const filter = parseFilter('Status', 'equals', 'In Progress');
-        expect(filter).toEqual({
-          property: 'Status',
-          select: { equals: 'In Progress' },
-        });
+      expect(parseFilter('Website', 'contains', 'example.com', undefined, schema)).toEqual({
+        property: 'Website',
+        url: { contains: 'example.com' },
       });
     });
 
-    describe('Empty/not-empty operators', () => {
-      it('should create is_empty filter with boolean true (not user value)', () => {
-        const filter = parseFilter('Assignee', 'is_empty', '', 'people');
-        expect(filter).toEqual({
-          property: 'Assignee',
-          people: { is_empty: true },
-        });
+    it('uses the current API filter family for specialized property types', () => {
+      expect(parseFilter('Email', 'ends_with', '@example.com', undefined, schema)).toEqual({
+        property: 'Email',
+        email: { ends_with: '@example.com' },
       });
-
-      it('should create is_not_empty filter with boolean true', () => {
-        const filter = parseFilter('Assignee', 'is_not_empty', '', 'people');
-        expect(filter).toEqual({
-          property: 'Assignee',
-          people: { is_not_empty: true },
-        });
+      expect(parseFilter('Phone', 'starts_with', '+1', undefined, schema)).toEqual({
+        property: 'Phone',
+        phone_number: { starts_with: '+1' },
       });
-
-      it('should handle is_empty for select type', () => {
-        const filter = parseFilter('Priority', 'is_empty', '', 'select');
-        expect(filter).toEqual({
-          property: 'Priority',
-          select: { is_empty: true },
-        });
+      expect(parseFilter('Created', 'after', '2026-01-01', undefined, schema)).toEqual({
+        property: 'Created',
+        created_time: { after: '2026-01-01' },
       });
-
-      it('should handle is_not_empty for date type', () => {
-        const filter = parseFilter('Due', 'is_not_empty', '', 'date');
-        expect(filter).toEqual({
-          property: 'Due',
-          date: { is_not_empty: true },
-        });
+      expect(parseFilter('Editor', 'contains', 'user-id', undefined, schema)).toEqual({
+        property: 'Editor',
+        last_edited_by: { contains: 'user-id' },
       });
-
-      it('should handle is_empty even if user passes a value (ignore it)', () => {
-        const filter = parseFilter('Tags', 'is_empty', 'ignored', 'multi_select');
-        expect(filter).toEqual({
-          property: 'Tags',
-          multi_select: { is_empty: true },
-        });
-      });
-
-      it('should handle valueless date operators (past_week, next_month)', () => {
-        const filter = parseFilter('Due', 'past_week', '', 'date');
-        expect(filter).toEqual({
-          property: 'Due',
-          date: { past_week: {} },
-        });
-      });
-
-      it('should handle next_month date operator', () => {
-        const filter = parseFilter('Due', 'next_month', '', 'date');
-        expect(filter).toEqual({
-          property: 'Due',
-          date: { next_month: {} },
-        });
+      expect(parseFilter('ID', 'greater_than', '41', undefined, schema)).toEqual({
+        property: 'ID',
+        unique_id: { greater_than: 41 },
       });
     });
 
-    describe('Various filter types', () => {
-      it('should support equals filter', () => {
-        const filter = parseFilter('Status', 'equals', 'Done', 'status');
-        expect(filter.status).toEqual({ equals: 'Done' });
-      });
+    it('parses number and checkbox values strictly', () => {
+      expect(parseFilter('Count', 'greater_than', '10', undefined, schema).number)
+        .toEqual({ greater_than: 10 });
+      expect(parseFilter('Done', 'equals', 'true', undefined, schema).checkbox)
+        .toEqual({ equals: true });
+      expect(() => parseFilter('Done', 'equals', 'yes', undefined, schema)).toThrow('true');
+    });
 
-      it('should support contains filter', () => {
-        const filter = parseFilter('Name', 'contains', 'test', 'rich_text');
-        expect(filter.rich_text).toEqual({ contains: 'test' });
+    it('supports valueless empty and relative-date operators', () => {
+      expect(parseFilter('Priority', 'is_empty', undefined, undefined, schema)).toEqual({
+        property: 'Priority',
+        select: { is_empty: true },
       });
+      expect(parseFilter('Due', 'past_week', undefined, undefined, schema)).toEqual({
+        property: 'Due',
+        date: { past_week: {} },
+      });
+    });
 
-      it('should support greater_than filter', () => {
-        const filter = parseFilter('Count', 'greater_than', '10', 'number');
-        expect(filter.number).toEqual({ greater_than: 10 });
-      });
+    it('requires values for normal operators and rejects relative dates on non-dates', () => {
+      expect(() => parseFilter('Status', 'equals', undefined, undefined, schema)).toThrow('requires a value');
+      expect(() => parseFilter('Status', 'past_week', undefined, undefined, schema)).toThrow('not valid');
+      expect(() => parseFilter('Due', 'contains', 'today', undefined, schema)).toThrow('not valid');
+    });
 
-      it('should support less_than filter', () => {
-        const filter = parseFilter('Count', 'less_than', '100', 'number');
-        expect(filter.number).toEqual({ less_than: 100 });
+    it('requires schema information unless an explicit type override is supplied', () => {
+      expect(() => parseFilter('Status', 'equals', 'Done')).toThrow('without a schema');
+      expect(parseFilter('Status', 'equals', 'Done', 'select')).toEqual({
+        property: 'Status',
+        select: { equals: 'Done' },
       });
+    });
 
-      it('should support on_or_after filter', () => {
-        const filter = parseFilter('Date', 'on_or_after', '2024-01-01', 'date');
-        expect(filter.date).toEqual({ on_or_after: '2024-01-01' });
-      });
+    it('fails clearly for properties absent from the schema', () => {
+      expect(() => parseFilter('Missing', 'equals', 'x', undefined, schema)).toThrow('does not exist');
+    });
 
-      it('should support on_or_before filter', () => {
-        const filter = parseFilter('Date', 'on_or_before', '2024-12-31', 'date');
-        expect(filter.date).toEqual({ on_or_before: '2024-12-31' });
-      });
+    it('requires raw JSON for nested formula and rollup filters', () => {
+      expect(() => parseFilter('Score', 'equals', '1', undefined, {
+        Score: { type: 'formula' },
+      })).toThrow('nested Notion filter');
     });
   });
 });
