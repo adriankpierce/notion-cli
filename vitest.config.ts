@@ -5,7 +5,12 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     setupFiles: ['./test/setup.ts'],
-    exclude: ['node_modules/**', '.claude/**'],
+    exclude: [
+      '**/node_modules/**',
+      '.claude/**',
+      '.local-recipes/**',
+      '.local-tools/**',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
