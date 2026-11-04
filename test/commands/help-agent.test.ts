@@ -23,13 +23,14 @@ describe('Help Agent Command', () => {
       expect(output).toContain('Setup');
     });
 
-    it('should include workspace discovery commands', async () => {
+    it('should explain workspace discovery and data-source resolution', async () => {
       await program.parseAsync(['node', 'test', 'quickstart']);
 
       const output = (console.log as any).mock.calls[0][0];
       expect(output).toContain('notion db list');
       expect(output).toContain('notion db schema');
-      expect(output).toContain('workspace structure');
+      expect(output).toContain('Queries run against a data source');
+      expect(output).toContain('--data-source-id');
     });
 
     it('should include search and query examples', async () => {
@@ -46,23 +47,39 @@ describe('Help Agent Command', () => {
       const output = (console.log as any).mock.calls[0][0];
       expect(output).toContain('notion page create');
       expect(output).toContain('notion page update');
-      expect(output).toContain('notion bulk update');
+      expect(output).toContain('notion page edit');
     });
 
-    it('should include batch operations', async () => {
+    it('should document native Markdown and file workflows', async () => {
       await program.parseAsync(['node', 'test', 'quickstart']);
 
       const output = (console.log as any).mock.calls[0][0];
-      expect(output).toContain('notion batch');
+      expect(output).toContain('Verbatim enhanced Markdown');
+      expect(output).toContain('notion file upload');
+      expect(output).toContain('Local files use Notion\'s upload lifecycle internally');
     });
 
-    it('should include tips', async () => {
+    it('should include output and safety guidance', async () => {
       await program.parseAsync(['node', 'test', 'quickstart']);
 
       const output = (console.log as any).mock.calls[0][0];
-      expect(output).toContain('Tips');
+      expect(output).toContain('Output and safety');
       expect(output).toContain('case-sensitive');
       expect(output).toContain('dry-run');
+      expect(output).toContain('stderr');
+    });
+
+    it('should include recipe and digest-bound ingestion guidance', async () => {
+      await program.parseAsync(['node', 'test', 'quickstart']);
+
+      const output = (console.log as any).mock.calls[0][0];
+      expect(output).toContain('notion recipes list');
+      expect(output).toContain('notion recipes run');
+      expect(output).toContain('notion ingest stage');
+      expect(output).toContain('notion ingest apply');
+      expect(output).toContain('notion ingest reconcile');
+      expect(output).toContain('--expect-digest');
+      expect(output).toContain('without rerunning the recipe');
     });
 
     it('should include property type documentation', async () => {
@@ -73,6 +90,18 @@ describe('Help Agent Command', () => {
       expect(output).toContain('status');
       expect(output).toContain('select');
       expect(output).toContain('checkbox');
+    });
+
+    it('does not teach retired or unsafe interfaces', async () => {
+      await program.parseAsync(['node', 'test', 'quickstart']);
+
+      const output = (console.log as any).mock.calls[0][0];
+      expect(output).not.toContain('notion block');
+      expect(output).not.toContain('notion batch');
+      expect(output).not.toContain('notion bulk');
+      expect(output).not.toContain('--token');
+      expect(output).not.toContain('--llm');
+      expect(output).not.toContain('notion find');
     });
   });
 

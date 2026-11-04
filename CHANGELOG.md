@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.12.0-alpha.0]
+
+### Added
+
+- Added native Markdown full-body replacement with file and stdin input,
+  guarded child-content deletion, optional asynchronous processing, and task
+  polling.
+- Added strict-by-default Markdown completeness checks with an explicit
+  `--allow-incomplete` escape hatch and optional meeting transcript retrieval.
+- Added schema-aware property writes and query filters, repeated raw and
+  shorthand filters, response property selection, and explicit cursor support.
+- Added package and CLI surface smoke checks, clean public-graph builds, an
+  ESLint flat configuration, and Vitest coverage support.
+- Added personal-access-token compatibility for local file uploads while still
+  enforcing workspace upload limits exposed by integration bot users.
+
+### Changed
+
+- Narrowed the public CLI to search, pages, databases/data sources, comments,
+  files, the agent quickstart and skill, and a raw API escape hatch.
+- Made page reads verbatim native Markdown; `--json` now returns the native
+  `page_markdown` response instead of block JSON.
+- Page creation and database queries resolve database containers to data sources and
+  fail rather than returning a response Notion marks incomplete.
+- Workspace search is described and implemented as indexed title discovery;
+  database-local post-filtering was removed.
+- Renamed the unpublished package to `@adriankpierce/notion-cli-agent`, updated
+  repository ownership metadata, and moved it to `0.12.0-alpha.0`.
+- Rewrote the README, quickstart, and bundled skill around the focused native
+  Markdown and data-source workflow.
+
+### Fixed
+
+- Preserved structured Notion error context, honored `Retry-After` for rate and
+  overload responses, and avoided unsafe automatic mutation retries.
+- Corrected block positioning used by the private file-attachment path, added
+  upload lifecycle validation and timeouts, and rejected unsupported files over
+  the single-part 20 MiB limit.
+- Clean builds now remove stale output and compile only the dependency graph of
+  the public CLI, so retired commands are not published accidentally.
+
+### Removed
+
+- Removed public block, user, import/export, batch/bulk, template, statistics,
+  duplication, validation, backup, and relations commands from registration.
+- Removed the command-line token option to keep integration secrets out of shell
+  history and process listings.
+- Removed legacy skill guidance for `find`, `--llm`, block operations, and
+  batch/bulk workflows.
+
 ## [0.11.0] - 2026-03-22
 
 ### Changed

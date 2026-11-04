@@ -1,57 +1,8 @@
 /**
  * Shared Notion API types
  *
- * Centralizes the type definitions that were previously duplicated
- * across export.ts, import.ts, backup.ts, blocks.ts, and others.
+ * Centralizes the API response shapes shared by the focused command surface.
  */
-
-// ─── Rich Text ───────────────────────────────────────────────────────────────
-
-export interface RichTextAnnotations {
-  bold?: boolean;
-  italic?: boolean;
-  strikethrough?: boolean;
-  underline?: boolean;
-  code?: boolean;
-}
-
-export interface RichTextLink {
-  url: string;
-}
-
-export interface RichText {
-  type: string;
-  plain_text: string;
-  href?: string | null;
-  annotations?: RichTextAnnotations;
-  text?: {
-    content: string;
-    link?: RichTextLink | null;
-  };
-}
-
-// ─── Blocks ──────────────────────────────────────────────────────────────────
-
-export interface Block {
-  id: string;
-  type: string;
-  has_children?: boolean;
-  children?: Block[];
-  [key: string]: unknown;
-}
-
-export interface BlockData {
-  rich_text?: RichText[];
-  checked?: boolean;
-  language?: string;
-  url?: string;
-  expression?: string;
-  icon?: { type: string; emoji?: string };
-  caption?: RichText[];
-  type?: string;
-  file?: { url: string };
-  external?: { url: string };
-}
 
 // ─── Pages ───────────────────────────────────────────────────────────────────
 
@@ -72,28 +23,12 @@ export interface PropertySchema {
 }
 
 export interface Database {
-  object?: 'database';
+  object?: 'database' | 'data_source';
   id: string;
   title?: { plain_text: string }[];
   description?: { plain_text: string }[];
   url?: string;
   properties: Record<string, PropertySchema>;
-}
-
-// ─── Notion Block Builders ───────────────────────────────────────────────────
-
-export interface NotionRichTextItem {
-  type: 'text';
-  text: {
-    content: string;
-    link?: { url: string } | null;
-  };
-  annotations?: RichTextAnnotations;
-}
-
-export interface NotionBlock {
-  object: 'block';
-  type: string;
   [key: string]: unknown;
 }
 
@@ -105,6 +40,34 @@ export interface PageMarkdownResponse {
   markdown: string;
   truncated: boolean;
   unknown_block_ids: string[];
+}
+
+export interface NotionErrorResponse {
+  object?: 'error';
+  status?: number;
+  code?: string;
+  message: string;
+  additional_data?: Record<string, unknown>;
+  request_id?: string;
+}
+
+export type AsyncTaskStatus = 'queued' | 'running' | 'retrying' | 'succeeded' | 'failed';
+
+export interface AsyncTaskOperation {
+  surface?: string;
+  name: string;
+}
+
+export interface AsyncTask<T = unknown> {
+  object: 'async_task';
+  id: string;
+  status: AsyncTaskStatus;
+  status_url: string;
+  created_time: string;
+  operation: AsyncTaskOperation;
+  poll_after_seconds?: number;
+  result?: T;
+  error?: NotionErrorResponse;
 }
 
 // ─── Pagination ──────────────────────────────────────────────────────────────

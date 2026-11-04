@@ -1,251 +1,436 @@
-# notion-cli-agent
+# Notion CLI Agent
 
-> A command-line interface for Notion — built for AI agents and humans.
+An opinionated command-line interface for agents that work with Notion pages,
+native Markdown, and data sources.
 
-[![npm version](https://img.shields.io/npm/v/notion-cli-agent.svg)](https://www.npmjs.com/package/notion-cli-agent)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+This project is deliberately not a second general-purpose Notion API client.
+Notion's official [`ntn`](https://developers.notion.com/cli/get-started/overview)
+CLI already provides broad endpoint coverage, authentication tooling, and a raw
+API interface. This CLI concentrates on composed agent workflows: resolving a
+database to its data source, inspecting a schema, building typed filters and
+properties, and treating a page body as Markdown.
 
-Uses Notion's native markdown API (`v2026-03-11`) for reading and writing page content. No hand-rolled block conversion — markdown goes straight to and from the Notion API.
+`ntn` now also has first-class data-source resolution/query, Markdown page
+get/create/edit, and file-upload commands. Use it when those direct operations
+are enough. This project remains useful for the extra agent contract around
+them: schema-aware property writes and filter shorthand, guarded complete-row
+pagination and JSONL, explicit property hydration, exact targeted Markdown
+replacement, and deterministic stdout/error behavior.
 
----
+The public interface does not expose generic block CRUD. A small internal block
+operation is retained only to attach a completed local file upload to a page.
+Notion Workers are complementary for hosted tools, scheduled jobs, and webhook
+automation; this local CLI does not need a Worker as its transport layer.
 
-## Install
+> **Alpha:** the next release is being prepared as
+> `@adriankpierce/notion-cli-agent@0.12.0-alpha.0`. It has not been published to
+> npm. Command and output contracts may still change before `0.12.0`.
 
-```bash
-npm install -g notion-cli-agent
-```
+## Requirements and installation
 
-Requires Node.js 20+ and a [Notion integration token](https://www.notion.so/my-integrations).
+- Node.js 20 or later
+- A Notion personal access token (PAT) with the Notion API capability, or an
+  internal/public connection token
+- For connection tokens, pages and databases shared with that connection
 
-## Configure
-
-```bash
-# Option 1: Environment variable
-export NOTION_TOKEN="ntn_your_token_here"
-
-# Option 2: Config file (persists across sessions)
-mkdir -p ~/.config/notion
-echo "ntn_your_token_here" > ~/.config/notion/api_key
-chmod 600 ~/.config/notion/api_key
-
-# Option 3: Pass directly
-notion --token "ntn_xxx" search "query"
-```
-
-Then share your pages/databases with the integration in Notion (... menu > Connect to).
-
----
-
-## Core Markdown Operations
-
-Three commands map 1:1 to Notion's native markdown API:
-
-| Operation | Command | API endpoint |
-|-----------|---------|-------------|
-| **Create** | `notion page create` | `POST /v1/pages` with `markdown` body |
-| **Read** | `notion page read` | `GET /v1/pages/{id}/markdown` |
-| **Update** | `notion page edit` | `PATCH /v1/pages/{id}/markdown` |
-
-### Create a page
+Until the scoped package is published, install from GitHub:
 
 ```bash
-# With title only
-notion page create --parent <db_id> --title "Meeting Notes"
-
-# With markdown content from file
-notion page create --parent <db_id> --title "Design Doc" --file doc.md
-
-# With properties
-notion page create --parent <db_id> --title "Bug Fix" \
-  --prop "Status:status=Todo" --prop "Priority:select=High"
+npm install --global github:adriankpierce/notion-cli-agent
 ```
 
-If `--title` is omitted, Notion extracts the first `# h1` heading from the markdown.
-
-### Read a page
+For development:
 
 ```bash
-notion page read <page_id>                # markdown to stdout
-notion page read <page_id> -o page.md     # save to file
-notion page read <page_id> --no-title     # omit the title heading
-notion page read <page_id> --json         # raw block JSON
+git clone https://github.com/adriankpierce/notion-cli-agent.git
+cd notion-cli-agent
+corepack enable
+pnpm install
+pnpm build
+pnpm link --global
 ```
 
-### Edit a page (search-and-replace)
+## Authentication
+
+For a local user-owned CLI workflow, a Notion PAT is usually the natural auth
+model: it inherits your page permissions and does not require pages to be shared
+with a bot. For stable team-owned automation, use an internal connection and
+share the required pages with it. In either case, pass the token through the
+standard `NOTION_API_TOKEN` environment variable:
 
 ```bash
-notion page edit <page_id> --search "old text" --replace "new text"
-notion page edit <page_id> --search "typo" --replace "fixed" --all
-notion page edit <page_id> --search "old" --replace "new" --dry-run
+export NOTION_API_TOKEN="ntn_your_token_here"
 ```
 
-Uses Notion's `update_content` operation. Search is exact and case-sensitive. Must match exactly once unless `--all` is used.
+`NOTION_TOKEN` and `NOTION_API_KEY` remain compatible for existing setups. The
+CLI also reads `~/.config/notion/api_key` and `~/.notion/token`.
+The official `ntn` credential store is not shared with this CLI, so an `ntn`
+login does not remove the need to provide one of these token sources.
 
----
+There is intentionally no `--token` option. Passing a secret as an argument can
+expose it in shell history and process listings. Do not commit tokens to a
+repository or include them in an agent prompt.
 
-## File Uploads
+## The Notion data model
 
-Upload files to pages. Block type is auto-detected from the file extension (image, video, audio, pdf, or generic file).
+With Notion API version `2026-03-11`, a database is a container and its rows and
+schema belong to a data source. Commands accept either a database ID or a data
+source ID and resolve the appropriate endpoint. If a database has several data
+sources, select one explicitly:
 
 ```bash
-# Local file
-notion file upload <page_id> photo.jpg
-
-# From URL (Notion fetches it)
-notion file upload <page_id> --url https://example.com/doc.pdf
-
-# With caption, at top of page
-notion file upload <page_id> photo.jpg --caption "Vacation" --position top
+notion --data-source-id <source-id> db schema <database-id>
+notion --data-source-id <source-id> db query <database-id>
 ```
 
-After upload, the file appears in `page read` markdown output and can be repositioned with `page edit`.
+IDs may be dashed or compact UUIDs. Page, database, file, and comment commands
+also accept Notion page/database URLs and normalize them before making requests.
 
----
+Workspace search and database query are different operations:
 
-## Search and Query
+- `notion search` discovers pages and data sources by indexed title. Notion
+  search is eventually consistent and is not full-text page search.
+- `notion db query` queries rows in one resolved data source and is the correct
+  way to filter within a known database.
+
+## Core workflow
+
+### Discover and inspect
 
 ```bash
-# Search across workspace
-notion search "project plan"
-notion search "meeting" --type page
-
-# Query a specific database
-notion db query <db_id> --title "Known Page" --json
-notion db query <db_id> --limit 20 --llm
-notion db query <db_id> --sort "Created time" --sort-dir desc --limit 5 --llm
-
-# Natural language filters
-notion find "overdue tasks unassigned" -d <db_id> --llm
-notion find "high priority" -d <db_id> --explain
+notion db list --compact
+notion db schema <database-or-source-id>
+notion db get <database-or-source-id> --json
 ```
 
-For exact lookup by title in a known database, use `db query --title` — not `search`. Notion's search API is fuzzy.
+`db list` reflects the results currently indexed by Notion workspace search. It
+is useful for discovery but should not be treated as an exhaustive inventory.
 
----
-
-## Page Properties
+### Query a data source
 
 ```bash
-# Update properties
-notion page update <page_id> --prop "Status:status=Done"
-notion page update <page_id> --title "New Title"
-notion page update <page_id> --clear-prop "Assignee"
-notion page update <page_id> --icon emoji_character
-
-# Archive
-notion page archive <page_id>
+notion db query <database-or-source-id> --limit 20
+notion db query <database-or-source-id> --title "Exact title" --json
+notion db query <database-or-source-id> --all --jsonl
+notion db query <database-or-source-id> \
+  --filter-prop Status --filter-type equals --filter-value Done \
+  --sort "Created time" --sort-dir desc
 ```
 
-Property type hints — auto-detection treats plain strings as `select`. Use `Key:type=Value` to force a type:
+Property types are read from the data-source schema. An explicit override is
+available when necessary:
 
 ```bash
-notion page update <id> --prop "Status:status=Done"
-notion page update <id> --prop "Notes:rich_text=Some text"
-notion page update <id> --prop "Owner:people=<user_id>"
+notion db query <source-id> \
+  --filter-prop Status --filter-type equals --filter-value Done \
+  --filter-prop-type status
 ```
 
----
-
-## Workspace Discovery
+Repeat the filter flags to create an `AND` filter. Values are supplied only for
+operators that require them:
 
 ```bash
-notion db list                           # all databases with properties
-notion db list --compact                 # all databases: name + ID
-notion db schema <db_id>                 # property types + valid values
+notion db query <source-id> \
+  --filter-prop Status --filter-type does_not_equal --filter-value Done \
+  --filter-prop Assignee --filter-type is_empty
 ```
 
----
+For complex Notion filter objects, repeat `--filter <json>`. Use
+`--filter-properties <property-id-or-name>` to reduce response size and
+`--cursor` to continue a single response page from `next_cursor`. Use `--all`
+to traverse every returned row and `--jsonl` to emit one returned row object per
+line. The CLI stages JSONL in a private temporary file until Notion confirms the
+row query is complete, so it never prints a partial stream as though it
+succeeded.
 
-## Import and Export
+Complete row traversal does not guarantee fully hydrated property values.
+Notion can truncate inline title, rich-text, people, relation, formula, and
+rollup data in a row object. Inspect property metadata such as `has_more`; use
+`notion page property <page-id> <property-id> --all --json` when the complete
+property value matters.
 
-### Obsidian
+The CLI rejects a response marked `request_status.type = "incomplete"` instead
+of silently returning Notion's 10,000-result partial set, including under
+`--all`. Narrow the query with a time window and run each partition separately.
+
+See [the filter reference](skills/notion/references/filters.md) for supported
+property types and operators.
+
+### Discover a title across the workspace
 
 ```bash
-# Export database to vault
-notion export db <db_id> --vault ~/obsidian-vault --folder notion-tasks --content
-
-# Import vault to database
-notion import obsidian ~/my-vault --to <db_id> --content
+notion search "project plan" --type page --limit 10
+notion search "Exact title" --exact --first --json
 ```
 
-### Markdown and CSV
+Use `db query --title` when the data source is known.
+
+## Pages as native Markdown
+
+The CLI uses Notion's native Markdown endpoints; it does not maintain its own
+block-to-Markdown converter.
+
+### Read
 
 ```bash
-# Import markdown to existing page (replaces content)
-notion import markdown doc.md --to <page_id>
-
-# Import CSV to database
-notion import csv data.csv --to <db_id>
+notion page get <page-id>                    # metadata and properties
+notion page get <page-id> --content --json   # metadata plus Markdown response
+notion page read <page-id>                   # Markdown only on stdout
+notion page read <page-id> --json            # native page_markdown response
+notion page read <page-id> --include-transcript -o page.md
 ```
 
----
+Plain `page read` is a verbatim body: it does not prepend a synthetic title.
+Truncated or unknown content fails before output by default. Use
+`--allow-incomplete` only when a partial result is intentional. Meeting-note
+transcripts are represented by a placeholder unless `--include-transcript` is
+requested.
 
-## Batch and Bulk Operations
+### Create
 
 ```bash
-# Batch: multiple operations in one command
-notion batch --dry-run --data '[
-  {"op":"get","type":"page","id":"<page_id>"},
-  {"op":"create","type":"page","parent":"<db_id>","data":{"title":"New"}},
-  {"op":"update","type":"page","id":"<id>","data":{"Status":"Done"}}
-]'
-
-# Bulk: update/archive matching entries
-notion bulk update <db_id> --where "Status=Todo" --set "Status=In Progress" --dry-run
-notion bulk archive <db_id> --where "Status=Done" --yes
+notion page create --parent <database-id> --title "Design notes" --file notes.md
+printf '# Body\n\nCreated from stdin.\n' | \
+  notion page create --parent <database-id> --title "New page"
+notion page create --parent <page-id> --parent-type page --title "Child page"
 ```
 
----
-
-## Other Commands
-
-| Category | Commands |
-|----------|----------|
-| **Search** | `search` |
-| **Pages** | `page get`, `page create`, `page read`, `page edit`, `page update`, `page archive`, `page property` |
-| **Files** | `file upload` |
-| **Databases** | `db list`, `db schema`, `db get`, `db query`, `db create`, `db update` |
-| **Blocks** | `block get`, `block list`, `block append`, `block update`, `block delete` |
-| **Comments** | `comment list`, `comment get`, `comment create` |
-| **Users** | `user me`, `user list`, `user get` |
-| **Export** | `export page`, `export db` |
-| **Import** | `import obsidian`, `import csv`, `import markdown` |
-| **Find** | `find` |
-| **Bulk** | `bulk update`, `bulk archive` |
-| **Validate** | `validate check`, `validate lint`, `validate health` |
-| **Stats** | `stats overview`, `stats timeline` |
-| **Backup** | `backup` |
-| **Templates** | `template list`, `template save`, `template use`, `template show`, `template delete` |
-| **Duplicate** | `duplicate page`, `duplicate schema`, `duplicate db` |
-| **Relations** | `relations backlinks`, `relations link`, `relations unlink`, `relations graph` |
-| **Batch** | `batch` |
-| **Skill** | `skill install` |
-| **API** | `api` |
-
----
-
-## Agent Skill
-
-Install the CLI skill into any repo for use with Claude Code, Cursor, or other agent frameworks:
+Database parents are resolved to data sources before creation. By default,
+property names and payload shapes are derived from the schema when one is
+available:
 
 ```bash
-notion skill install              # installs to current repo's .claude/skills/
-notion skill install /path/to/repo
+notion page create --parent <database-id> --title "Task" \
+  --prop "Status=Todo" \
+  --prop "Priority=High"
 ```
 
-The skill teaches agents how to use the CLI with progressive disclosure — core commands in `SKILL.md`, detailed references loaded on demand.
+Use `Name:type=value` only to override the schema or for a parent page without
+a data-source schema, for example `Status:status=Todo`. A `json` type is the
+explicit escape hatch for a complete Notion property value. Explicit type hints
+bypass the schema type, and select/status option membership is not prevalidated;
+inspect `db schema` and use the exact option name.
 
----
-
-## Raw API Access
+### Targeted edit
 
 ```bash
-notion api GET "pages/<page_id>"
-notion api POST "search" --data '{"query": "test"}'
-notion api GET "users" --query "page_size=5"
+notion page edit <page-id> --search "old text" --replace "new text" --dry-run
+notion page edit <page-id> --search "old text" --replace "new text"
+notion page edit <page-id> --search "repeated" --replace "updated" --all
 ```
 
----
+Search text is exact and case-sensitive. Without `--all`, Notion requires one
+unambiguous match. `page edit` uses native `update_content`, so it is normally
+safer than replacing the full body.
+
+### Full replacement
+
+```bash
+notion page replace <page-id> --file replacement.md
+printf '# Replacement\n' | notion page replace <page-id>
+```
+
+Replacement can delete content. Child pages and child databases are protected
+unless `--allow-deleting-content` is supplied explicitly. `--async` asks Notion
+to process a large create, edit, or replacement asynchronously and waits for its
+task to finish.
+
+Markdown returned by Notion can contain signed media URLs that expire. Create,
+edit, and replacement commands reject those URLs by default; download and
+re-upload the assets for durable content. `--allow-temporary-media` is an
+explicit escape hatch when an expiring reference is truly intended.
+
+### Page properties
+
+```bash
+notion page update <page-id> --prop "Status=Done"
+notion page update <page-id> --title "New title"
+notion page update <page-id> --clear-prop Assignee
+notion page archive <page-id>
+notion page property <page-id> <property-id> --all --json
+```
+
+`page property` retrieves a property item separately, which is important for
+paginated relation, rollup, people, title, and rich-text values. Use `--cursor`
+for one continuation page or `--all` for a guarded complete traversal.
+
+## Recipes and staged ingestion
+
+Recipes are user-supplied, content-agnostic adapters that turn a URL into a
+reviewable ingestion artifact. This package does not ship source-specific
+recipes. Point the CLI at one or more trusted recipe directories explicitly;
+repeat the option when composing a local collection. Duplicate recipe names
+are rejected rather than resolved by directory precedence:
+
+```bash
+notion recipes list --recipes-dir ./team-recipes --recipes-dir ./.local-recipes
+notion recipes describe article --recipes-dir ./team-recipes
+notion recipes run https://example.com/post \
+  --recipe auto --recipes-dir ./team-recipes --timeout 30000 > artifact.json
+```
+
+`recipes list`, `recipes describe`, and `recipes run` are artifact-only commands:
+they do not initialize a Notion client and do not require `NOTION_API_TOKEN`.
+`run` emits one JSON artifact on stdout. Diagnostics belong on stderr. Explicit
+recipe names are preferred for unattended jobs; `auto` uses deterministic recipe
+selection and fails when the available recipes do not produce one unambiguous
+match. A recipe is unsandboxed executable local code: it can access the
+filesystem and network and can spawn processes. Load recipes only from
+directories you trust. Timeout and output limits bound the direct recipe
+runner; process cleanup is best-effort and is not an OS sandbox for descendants
+that outlive the direct recipe process.
+
+Each recipe occupies its own directory with a closed `recipe.json` descriptor.
+The descriptor declares schema version 1, a lowercase name, a recipe release,
+an executable command plus contained entry file, and optional literal URL
+matchers (scheme, host, host suffix, and path prefix). The subprocess receives
+one `{schema_version, source_url}` JSON request on stdin and must return one
+bounded JSON artifact on stdout containing `source_url`, enhanced `markdown`,
+an optional title, and optional SHA-256 asset attestations. Logs go to stderr.
+Exported JSON-schema constants provide a machine-readable structural baseline;
+the runtime validators additionally enforce canonical HTTP(S) URLs, literal
+matcher syntax, UTF-8 byte limits, and other semantic constraints. Unknown
+fields, ambiguous matches, path escapes, malformed UTF-8, extra stdout,
+timeouts, and output overflows fail closed.
+
+Ingestion is a separate, two-step Notion workflow. Stage first, review the
+private manifest and its printed digest, then apply exactly that manifest:
+
+```bash
+notion ingest stage https://example.com/post \
+  --recipe auto --recipes-dir ./team-recipes \
+  --page <existing-page-id> --manifest ./ingest-manifest.json
+
+notion ingest stage https://example.com/post \
+  --recipe article --recipes-dir ./team-recipes \
+  --parent <parent-id> --parent-type page \
+  --manifest ./ingest-manifest.json
+
+notion ingest apply ./ingest-manifest.json \
+  --expect-digest <sha256-printed-by-stage>
+
+# Only after an unknown new-page result and once its page ID is known:
+notion ingest reconcile ./ingest-manifest.json --page <created-page-id> \
+  --expect-digest <sha256-printed-by-stage>
+```
+
+`ingest stage` never mutates Notion. Existing-page staging reads the page to bind
+its current Markdown and edit timestamp; database-parent staging resolves the
+database to a data source. Page-parent staging is artifact-only and requires no
+Notion authentication. Choose exactly one target mode: `--page` for an existing
+page, or `--parent` with `--parent-type page|database` for a new page.
+New-page artifacts must provide an explicit title so Notion cannot implicitly
+extract the first H1 from the digest-bound body. Database staging automatically
+binds the schema's title property; `--title-property` can select it explicitly.
+`ingest apply` does not execute a recipe or fetch the source URL again. It checks
+the separately reviewed digest, revalidates the staged preconditions, mutates
+sequentially, and reports uncertain or partial outcomes instead of replaying an
+ambiguous write. A new-page write with an unknown outcome must be reconciled
+with the known created page ID; do not blindly rerun it. Reconcile only after the
+original apply process has terminated—never race recovery against a request that
+may still be in flight. The append-only local creation journal arbitrates recovery
+and permits a new attempt only after Notion definitively rejected the prior one.
+Apply creates private companion journal files beside the manifest. After any
+creation attempt, do not move, copy, or delete the manifest independently of
+those files; resume apply or reconcile with the original manifest path. Keep the
+whole set private: it contains the exact staged content.
+
+When a recipe includes asset attestations, every enhanced-Markdown media source
+must have a matching type, byte length, and SHA-256 digest. Apply verifies the
+media again through Notion's readback URLs, so rehosting does not weaken the
+content binding. Those downloads reject redirects and private/local network
+addresses, are pinned to a validated DNS result, and are bounded to 128 MiB per
+asset, 512 MiB in aggregate, and five minutes per verification pass.
+
+## Images and files
+
+Enhanced Markdown accepts media that already has a public URL. For example:
+
+```markdown
+![Architecture diagram](https://example.com/architecture.png)
+<file src="https://example.com/specification.pdf">Specification</file>
+```
+
+For a private local file, Notion still requires its File Upload lifecycle and an
+attachment step. The CLI hides that exception behind one command:
+
+```bash
+notion file upload <page-id> architecture.png --caption "Architecture"
+notion file upload <page-id> --url https://example.com/specification.pdf
+notion file upload <page-id> architecture.png --position top --json
+```
+
+Local files currently use Notion's single-part upload and are limited to 20 MiB.
+With integration-token authentication the CLI also enforces any lower limit
+reported for the bot's workspace (5 MiB on free workspaces). Personal access
+tokens do not expose that value through the current-user response, so Notion
+enforces any lower workspace limit when the upload is created. Larger files
+require multipart support, which is not implemented yet. URL imports require
+HTTPS and are polled until Notion reports success or a timeout.
+
+URLs returned for Notion-hosted files are signed and temporary. A durable export
+must download those assets rather than treating their response URLs as stable.
+
+## Comments and raw API access
+
+Comments remain available for review workflows:
+
+```bash
+notion comment list <page-id>
+notion comment create --page <page-id> --text "Please review this section."
+```
+
+For an endpoint outside the focused surface, use the official `ntn api` command
+when available. This project retains a small raw escape hatch:
+
+```bash
+notion api GET "pages/<page-id>"
+notion api POST search --data '{"query":"roadmap"}'
+notion api GET users --query "page_size=5" --query "start_cursor=<cursor>"
+```
+
+## Agent skill
+
+The published package includes an agent skill with concise workflow guidance and
+a detailed filter reference:
+
+```bash
+notion skill install
+notion skill install /path/to/repository
+notion skill install /path/to/repository --force  # replace an existing copy
+```
+
+The command installs to `.claude/skills/notion` in the target repository. The
+source skill is also available directly at [`skills/notion`](skills/notion).
+Existing installations are not overwritten unless `--force` is explicit.
+
+## Output and failure behavior
+
+- Commands that offer `--json` emit JSON on stdout unless an explicit
+  `--output` path redirects the requested data to a file.
+- Page Markdown and requested data go to stdout; diagnostics go to stderr.
+- API errors retain the Notion status, error code, request ID, additional data,
+  and retry guidance when present.
+- Rate limits honor `Retry-After`. Unsafe mutations are not automatically
+  replayed after ambiguous network or server failures.
+- A nonzero exit status means the requested operation did not complete safely.
+
+Use `notion quickstart` for an in-terminal agent reference and
+`notion <command> --help` for the authoritative options in the installed build.
+
+## Development
+
+```bash
+pnpm build
+pnpm lint
+pnpm test:run
+pnpm test:coverage
+pnpm package:check
+```
+
+`build` removes `dist` before compiling the public dependency graph, preventing
+retired or deleted command files from leaking into the package. `package:check`
+verifies the command surface and dry-runs the npm tarball.
 
 ## License
 

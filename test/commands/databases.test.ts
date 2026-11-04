@@ -6,6 +6,19 @@ describe('Databases Command', () => {
   let program: Command;
   let mockClient: any;
 
+  function expectQuery(body: unknown, query?: unknown): void {
+    const expectedBody = {
+      result_type: 'page',
+      ...(body as Record<string, unknown>),
+    };
+    expect(mockClient.post).toHaveBeenCalledWith(
+      'data_sources/db-123/query',
+      expectedBody,
+      query,
+      { retrySafe: true },
+    );
+  }
+
   beforeEach(async () => {
     vi.resetModules();
 
@@ -29,6 +42,62 @@ describe('Databases Command', () => {
     registerDatabasesCommand(program);
   });
 
+  describe('database list', () => {
+    it('should paginate explicitly with --all and preserve terminal metadata', async () => {
+      const first = { ...mockDatabase, id: 'ds-1', object: 'data_source' };
+      const second = { ...mockDatabase, id: 'ds-2', object: 'data_source' };
+      mockClient.post
+        .mockResolvedValueOnce({ results: [first], has_more: true, next_cursor: 'next-1' })
+        .mockResolvedValueOnce({ results: [second], has_more: false, next_cursor: null });
+
+      await program.parseAsync(['node', 'test', 'database', 'list', '--all', '--json']);
+
+      expect(mockClient.post).toHaveBeenNthCalledWith(1, 'search', {
+        filter: { property: 'object', value: 'data_source' },
+        page_size: 100,
+      }, undefined, { retrySafe: true });
+      expect(mockClient.post).toHaveBeenNthCalledWith(2, 'search', {
+        filter: { property: 'object', value: 'data_source' },
+        page_size: 100,
+        start_cursor: 'next-1',
+      }, undefined, { retrySafe: true });
+
+      const output = JSON.parse((console.log as any).mock.calls[0][0]);
+      expect(output).toMatchObject({ has_more: false, next_cursor: null });
+      expect(output.results.map((item: { id: string }) => item.id)).toEqual(['ds-1', 'ds-2']);
+    });
+
+    it('should reject a repeated cursor instead of looping forever', async () => {
+      mockClient.post.mockResolvedValue({
+        results: [{ ...mockDatabase, id: 'ds-1', object: 'data_source' }],
+        has_more: true,
+        next_cursor: 'stuck-cursor',
+      });
+
+      await expect(program.parseAsync([
+        'node', 'test', 'database', 'list', '--all', '--json',
+      ])).rejects.toThrow('repeated pagination cursor stuck-cursor');
+
+      expect(mockClient.post).toHaveBeenCalledTimes(2);
+    });
+
+    it('should keep compact stdout record-only and send continuation metadata to stderr', async () => {
+      mockClient.post.mockResolvedValue({
+        results: [{ ...mockDatabase, id: 'ds-1', object: 'data_source' }],
+        has_more: true,
+        next_cursor: 'next-1',
+      });
+
+      await program.parseAsync([
+        'node', 'test', 'database', 'list', '--compact', '--limit', '1',
+      ]);
+
+      expect(console.log).toHaveBeenCalledTimes(1);
+      expect(console.log).toHaveBeenCalledWith('Test Database  ds-1');
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('next-1'));
+    });
+  });
+
   describe('database get', () => {
     it('should get database by ID', async () => {
       setupDatabaseResolution(mockClient);
@@ -46,7 +115,7 @@ describe('Databases Command', () => {
 
       await program.parseAsync(['node', 'test', 'database', 'get', 'db-123', '--json']);
 
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"object": "database"'));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"object": "data_source"'));
     });
   });
 
@@ -58,7 +127,7 @@ describe('Databases Command', () => {
 
       await program.parseAsync(['node', 'test', 'database', 'query', 'db-123']);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         page_size: 100,
       });
     });
@@ -74,7 +143,7 @@ describe('Databases Command', () => {
         '--filter', filter,
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         filter: { property: 'Status', status: { equals: 'Done' } },
         page_size: 100,
       });
@@ -93,7 +162,7 @@ describe('Databases Command', () => {
         '--filter-prop-type', 'status',
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         filter: {
           property: 'Status',
           status: { equals: 'Done' },
@@ -112,7 +181,7 @@ describe('Databases Command', () => {
         '--sort', 'Created',
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         sorts: [{
           property: 'Created',
           direction: 'descending',
@@ -132,7 +201,7 @@ describe('Databases Command', () => {
         '--sort-dir', 'asc',
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         sorts: [{
           property: 'Priority',
           direction: 'ascending',
@@ -151,7 +220,7 @@ describe('Databases Command', () => {
         '--limit', '50',
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         page_size: 50,
       });
     });
@@ -166,7 +235,7 @@ describe('Databases Command', () => {
         '--cursor', 'cursor-123',
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         page_size: 100,
         start_cursor: 'cursor-123',
       });
@@ -179,8 +248,8 @@ describe('Databases Command', () => {
 
       await program.parseAsync(['node', 'test', 'database', 'query', 'db-123']);
 
-      expect(console.log).toHaveBeenCalledWith(
-        expect.stringContaining('(more results, cursor:')
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('More results are available (cursor:')
       );
     });
 
@@ -210,7 +279,7 @@ describe('Databases Command', () => {
         '--limit', '25',
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         filter: {
           property: 'Status',
           status: { equals: 'In Progress' },
@@ -221,6 +290,127 @@ describe('Databases Command', () => {
         }],
         page_size: 25,
       });
+    });
+  });
+
+  describe('database query --all and --jsonl', () => {
+    it('should document complete pagination and JSONL in command help', () => {
+      const database = program.commands.find(command => command.name() === 'database');
+      const query = database?.commands.find(command => command.name() === 'query');
+      const help = query?.helpInformation() ?? '';
+
+      expect(help).toContain('--all');
+      expect(help).toContain('Fetch every returned row');
+      expect(help).toContain('--jsonl');
+      expect(help).toContain('Results per API page');
+    });
+
+    it('should drain every page with filters, sorts, projection, and a configured page size', async () => {
+      setupDatabaseResolution(mockClient);
+      const secondPage = { ...mockPage, id: 'page-456' };
+      mockClient.post
+        .mockResolvedValueOnce(createPaginatedResult([mockPage], 'cursor-2', true))
+        .mockResolvedValueOnce(createPaginatedResult([secondPage]));
+
+      await program.parseAsync([
+        'node', 'test', 'database', 'query', 'db-123',
+        '--all',
+        '--json',
+        '--limit', '50',
+        '--filter-prop', 'Status',
+        '--filter-type', 'equals',
+        '--filter-value', 'Done',
+        '--filter-prop-type', 'status',
+        '--sort', 'Name',
+        '--sort-dir', 'asc',
+        '--filter-properties', 'title',
+        '--filter-properties', 'status',
+      ]);
+
+      const commonBody = {
+        page_size: 50,
+        result_type: 'page',
+        filter: { property: 'Status', status: { equals: 'Done' } },
+        sorts: [{ property: 'Name', direction: 'ascending' }],
+      };
+      const query = { filter_properties: ['title', 'status'] };
+      expect(mockClient.post).toHaveBeenNthCalledWith(
+        1, 'data_sources/db-123/query', commonBody, query, { retrySafe: true },
+      );
+      expect(mockClient.post).toHaveBeenNthCalledWith(
+        2,
+        'data_sources/db-123/query',
+        { ...commonBody, start_cursor: 'cursor-2' },
+        query,
+        { retrySafe: true },
+      );
+
+      const output = JSON.parse((console.log as any).mock.calls[0][0]);
+      expect(output).toMatchObject({ object: 'list', has_more: false, next_cursor: null });
+      expect(output.results.map((page: { id: string }) => page.id))
+        .toEqual(['page-123', 'page-456']);
+    });
+
+    it('should emit one returned row object per JSONL line', async () => {
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      setupDatabaseResolution(mockClient);
+      const secondPage = { ...mockPage, id: 'page-456' };
+      mockClient.post.mockResolvedValue(createPaginatedResult([mockPage, secondPage]));
+
+      await program.parseAsync([
+        'node', 'test', 'database', 'query', 'db-123', '--all', '--jsonl',
+      ]);
+
+      const output = stdoutSpy.mock.calls.map(([chunk]) => chunk.toString()).join('');
+      const lines = output.trim().split('\n').map(line => JSON.parse(line));
+      expect(lines.map((page: { id: string }) => page.id)).toEqual(['page-123', 'page-456']);
+      stdoutSpy.mockRestore();
+    });
+
+    it('should not emit partial JSONL when a later response is incomplete', async () => {
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      setupDatabaseResolution(mockClient);
+      mockClient.post
+        .mockResolvedValueOnce(createPaginatedResult([mockPage], 'cursor-2', true))
+        .mockResolvedValueOnce({
+          ...createPaginatedResult([{ ...mockPage, id: 'page-456' }]),
+          request_status: { type: 'incomplete' },
+        });
+
+      await expect(program.parseAsync([
+        'node', 'test', 'database', 'query', 'db-123', '--all', '--jsonl',
+      ])).rejects.toThrow('10,000-result safety limit');
+
+      expect(console.log).not.toHaveBeenCalled();
+      expect(stdoutSpy).not.toHaveBeenCalled();
+      stdoutSpy.mockRestore();
+    });
+
+    it('should reject JSONL without complete row traversal', async () => {
+      await expect(program.parseAsync([
+        'node', 'test', 'database', 'query', 'db-123', '--jsonl',
+      ])).rejects.toThrow('--jsonl requires --all');
+
+      expect(mockClient.get).not.toHaveBeenCalled();
+      expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
+    it('should reject --all with a starting cursor before querying', async () => {
+      await expect(program.parseAsync([
+        'node', 'test', 'database', 'query', 'db-123', '--all', '--cursor', 'cursor-1',
+      ])).rejects.toThrow('--all cannot be combined with --cursor');
+
+      expect(mockClient.get).not.toHaveBeenCalled();
+      expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
+    it('should reject mutually exclusive JSON formats before querying', async () => {
+      await expect(program.parseAsync([
+        'node', 'test', 'database', 'query', 'db-123', '--json', '--jsonl',
+      ])).rejects.toThrow('--json and --jsonl are mutually exclusive');
+
+      expect(mockClient.get).not.toHaveBeenCalled();
+      expect(mockClient.post).not.toHaveBeenCalled();
     });
   });
 
@@ -242,7 +432,7 @@ describe('Databases Command', () => {
         '--filter-prop-type', 'checkbox',
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         filter: {
           and: [
             { property: 'Due Date', date: { before: '2024-01-01' } },
@@ -274,7 +464,7 @@ describe('Databases Command', () => {
         '--filter-prop-type', 'checkbox',
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         filter: {
           and: [
             { property: 'Status', status: { equals: 'Done' } },
@@ -286,7 +476,7 @@ describe('Databases Command', () => {
       });
     });
 
-    it('should exit with error when filter flag counts are mismatched', async () => {
+    it('should reject when filter flag counts are mismatched', async () => {
       await expect(
         program.parseAsync([
           'node', 'test', 'database', 'query', 'db-123',
@@ -295,14 +485,10 @@ describe('Databases Command', () => {
           '--filter-type', 'equals',
           '--filter-value', 'Done',
         ])
-      ).rejects.toThrow('process.exit(1)');
-
-      expect(console.error).toHaveBeenCalledWith(
-        'Error: --filter-prop, --filter-type, and --filter-value must be provided the same number of times'
-      );
+      ).rejects.toThrow('--filter-prop and --filter-type must be provided the same number of times.');
     });
 
-    it('should exit with error when --filter-prop-type count does not match filter group count', async () => {
+    it('should reject when --filter-prop-type count does not match filter group count', async () => {
       await expect(
         program.parseAsync([
           'node', 'test', 'database', 'query', 'db-123',
@@ -314,11 +500,7 @@ describe('Databases Command', () => {
           '--filter-value', 'Done',
           '--filter-prop-type', 'status',
         ])
-      ).rejects.toThrow('process.exit(1)');
-
-      expect(console.error).toHaveBeenCalledWith(
-        'Error: --filter-prop-type must be provided either for all filter groups or for none'
-      );
+      ).rejects.toThrow('--filter-prop-type must be provided either for all filter groups or for none.');
     });
 
     it('should produce plain filter object for single filter group (regression)', async () => {
@@ -334,7 +516,7 @@ describe('Databases Command', () => {
         '--filter-prop-type', 'status',
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         filter: { property: 'Status', status: { equals: 'Done' } },
         page_size: 100,
       });
@@ -351,10 +533,80 @@ describe('Databases Command', () => {
         '--filter', filter,
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
+      expectQuery({
         filter: { property: 'Status', status: { equals: 'Done' } },
         page_size: 100,
       });
+    });
+
+    it('should combine repeated raw filters with AND', async () => {
+      setupDatabaseResolution(mockClient);
+      mockClient.post.mockResolvedValue(createPaginatedResult([mockPage]));
+
+      await program.parseAsync([
+        'node', 'test', 'database', 'query', 'db-123',
+        '--filter', JSON.stringify({ property: 'Status', status: { equals: 'Done' } }),
+        '--filter', JSON.stringify({ property: 'Value', number: { greater_than: 5 } }),
+      ]);
+
+      expectQuery({
+        filter: {
+          and: [
+            { property: 'Status', status: { equals: 'Done' } },
+            { property: 'Value', number: { greater_than: 5 } },
+          ],
+        },
+        page_size: 100,
+      });
+    });
+
+    it('should resolve an unhinted filter type from the data-source schema', async () => {
+      setupDatabaseResolution(mockClient);
+      mockClient.post.mockResolvedValue(createPaginatedResult([mockPage]));
+
+      await program.parseAsync([
+        'node', 'test', 'database', 'query', 'db-123',
+        '--filter-prop', 'Status',
+        '--filter-type', 'equals',
+        '--filter-value', 'Active',
+      ]);
+
+      expectQuery({
+        filter: { property: 'Status', status: { equals: 'Active' } },
+        page_size: 100,
+      });
+    });
+
+    it('should accept valueless operators without --filter-value', async () => {
+      setupDatabaseResolution(mockClient);
+      mockClient.post.mockResolvedValue(createPaginatedResult([mockPage]));
+
+      await program.parseAsync([
+        'node', 'test', 'database', 'query', 'db-123',
+        '--filter-prop', 'Status',
+        '--filter-type', 'is_empty',
+      ]);
+
+      expectQuery({
+        filter: { property: 'Status', status: { is_empty: true } },
+        page_size: 100,
+      });
+    });
+
+    it('should pass repeated filter_properties query parameters', async () => {
+      setupDatabaseResolution(mockClient);
+      mockClient.post.mockResolvedValue(createPaginatedResult([mockPage]));
+
+      await program.parseAsync([
+        'node', 'test', 'database', 'query', 'db-123',
+        '--filter-properties', 'title',
+        '--filter-properties', 'status',
+      ]);
+
+      expectQuery(
+        { page_size: 100 },
+        { filter_properties: ['title', 'status'] },
+      );
     });
   });
 
@@ -371,7 +623,9 @@ describe('Databases Command', () => {
         'data_sources/db-123/query',
         expect.objectContaining({
           filter: { property: 'Name', title: { equals: 'My Task' } },
-        })
+        }),
+        undefined,
+        { retrySafe: true },
       );
     });
   });
@@ -393,9 +647,7 @@ describe('Databases Command', () => {
 
       await expect(
         program.parseAsync(['node', 'test', 'database', 'get', 'invalid-id'])
-      ).rejects.toThrow('process.exit(1)');
-
-      expect(console.error).toHaveBeenCalledWith('Error:', 'Database not found');
+      ).rejects.toThrow('Database not found');
     });
 
     it('should handle query errors', async () => {
@@ -404,9 +656,7 @@ describe('Databases Command', () => {
 
       await expect(
         program.parseAsync(['node', 'test', 'database', 'query', 'db-123'])
-      ).rejects.toThrow('process.exit(1)');
-
-      expect(console.error).toHaveBeenCalledWith('Error:', 'Invalid filter');
+      ).rejects.toThrow('Invalid filter');
     });
 
     it('should handle invalid JSON filter', async () => {
@@ -415,7 +665,7 @@ describe('Databases Command', () => {
           'node', 'test', 'database', 'query', 'db-123',
           '--filter', '{invalid json}',
         ])
-      ).rejects.toThrow();
+      ).rejects.toThrow('Invalid --filter JSON');
     });
   });
 });

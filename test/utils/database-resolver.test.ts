@@ -39,9 +39,33 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
    * Helper: set up mock for explicit data-source-id path.
    * Only GET /data_sources/{id} (skip discovery).
    */
-  function setupExplicitDsMock(dataSourceId = 'ds-456') {
-    mockClient.get.mockResolvedValueOnce({ ...mockDataSource, id: dataSourceId });
+  function setupExplicitDsMock(dataSourceId = 'ds-456', databaseId = 'any-id') {
+    mockClient.get.mockResolvedValueOnce({
+      ...mockDataSource,
+      id: dataSourceId,
+      parent: { type: 'database_id', database_id: databaseId },
+    });
   }
+
+  describe('normalizeNotionId()', () => {
+    it('normalizes compact IDs and IDs embedded in Notion URLs', () => {
+      expect(resolver.normalizeNotionId('2C98284A864381409380DEAF158A1077'))
+        .toBe('2c98284a-8643-8140-9380-deaf158a1077');
+      expect(resolver.normalizeNotionId(
+        'https://www.notion.so/acme/Tasks-2c98284a864381409380deaf158a1077?v=view-id',
+      )).toBe('2c98284a-8643-8140-9380-deaf158a1077');
+      expect(resolver.normalizeNotionId(
+        'https://app.notion.com/p/2c98284a864381409380deaf158a1077?v=view-id',
+      )).toBe('2c98284a-8643-8140-9380-deaf158a1077');
+    });
+
+    it('rejects unrelated URLs and Notion URLs without an ID', () => {
+      expect(() => resolver.normalizeNotionId('https://example.com/2c98284a864381409380deaf158a1077'))
+        .toThrow('Expected a Notion URL');
+      expect(() => resolver.normalizeNotionId('https://www.notion.so/acme/tasks'))
+        .toThrow('Could not find a Notion ID');
+    });
+  });
 
   // ─── resolveDatabase ──────────────────────────────────────────────────────
 
@@ -54,7 +78,6 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
       expect(result.type).toBe('data_source');
       expect(result.schemaPath).toBe('data_sources/db-123');
       expect(result.queryPath).toBe('data_sources/db-123/query');
-      expect(result.updatePath).toBe('data_sources/db-123');
       expect(result.schema.properties).toBeDefined();
       expect(result.databaseId).toBe('db-123');
       expect(result.dataSourceId).toBe('db-123');
@@ -66,7 +89,7 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
     it('should fall back to legacy discovery and error with helpful message when multiple data sources exist', async () => {
       // First call: GET /data_sources/{id} fails (not a data_source)
       mockClient.get
-        .mockRejectedValueOnce(new Error('Not found'))
+        .mockRejectedValueOnce(Object.assign(new Error('Not found'), { status: 404 }))
         .mockResolvedValueOnce({
           ...mockMultiDsDatabase,
           data_sources: [
@@ -82,7 +105,7 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
     it('should fall back to legacy discovery and error when database has no data sources', async () => {
       // First call: GET /data_sources/{id} fails (not a data_source)
       mockClient.get
-        .mockRejectedValueOnce(new Error('Not found'))
+        .mockRejectedValueOnce(Object.assign(new Error('Not found'), { status: 404 }))
         .mockResolvedValueOnce({
           ...mockMultiDsDatabase,
           data_sources: [],
@@ -93,7 +116,7 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
     });
 
     it('should use explicit dataSourceId without discovery', async () => {
-      setupExplicitDsMock('ds-explicit');
+      setupExplicitDsMock('ds-explicit', 'any-db-id');
 
       const result = await resolver.resolveDatabase(mockClient, 'any-db-id', 'ds-explicit');
 
@@ -101,6 +124,16 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
       expect(result.schemaPath).toBe('data_sources/ds-explicit');
       expect(result.queryPath).toBe('data_sources/ds-explicit/query');
       // Only one GET call (no discovery step)
+      expect(mockClient.get).toHaveBeenCalledTimes(1);
+      expect(mockClient.get).toHaveBeenCalledWith('data_sources/ds-explicit');
+    });
+
+    it('should reject an explicit data source owned by a different database', async () => {
+      setupExplicitDsMock('ds-explicit', 'different-db');
+
+      await expect(resolver.resolveDatabase(mockClient, 'requested-db', 'ds-explicit'))
+        .rejects.toThrow('belongs to database different-db, not requested-db');
+
       expect(mockClient.get).toHaveBeenCalledTimes(1);
       expect(mockClient.get).toHaveBeenCalledWith('data_sources/ds-explicit');
     });
@@ -116,7 +149,7 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
     });
 
     it('should cache resolution with explicit dataSourceId using composite key', async () => {
-      setupExplicitDsMock('ds-1');
+      setupExplicitDsMock('ds-1', 'db-x');
 
       const result1 = await resolver.resolveDatabase(mockClient, 'db-x', 'ds-1');
       const result2 = await resolver.resolveDatabase(mockClient, 'db-x', 'ds-1');
@@ -153,6 +186,7 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
 
       await expect(resolver.resolveDatabase(mockClient, 'db-123'))
         .rejects.toThrow('fetch failed');
+      expect(mockClient.get).toHaveBeenCalledTimes(1);
     });
 
     it('should clear cache when clearResolverCache is called', async () => {
@@ -175,7 +209,7 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
       expect(result.schema.id).toBeDefined();
       expect(result.schema.properties).toBeDefined();
       expect(result.schema.title).toBeDefined();
-      expect(result.schema.object).toBe('database');
+      expect(result.schema.object).toBe('data_source');
     });
 
     it('should handle database ID with dashes (UUID format)', async () => {
@@ -184,6 +218,19 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
         .mockResolvedValueOnce({ ...mockDataSource, object: 'data_source', id: uuidId });
 
       const result = await resolver.resolveDatabase(mockClient, uuidId);
+
+      expect(result.databaseId).toBe(uuidId);
+      expect(mockClient.get).toHaveBeenCalledWith(`data_sources/${uuidId}`);
+    });
+
+    it('should resolve a database URL using its normalized ID', async () => {
+      const uuidId = '2c98284a-8643-8140-9380-deaf158a1077';
+      mockClient.get.mockResolvedValueOnce({ ...mockDataSource, object: 'data_source', id: uuidId });
+
+      const result = await resolver.resolveDatabase(
+        mockClient,
+        `https://www.notion.so/Tasks-${uuidId.replace(/-/g, '')}`,
+      );
 
       expect(result.databaseId).toBe(uuidId);
       expect(mockClient.get).toHaveBeenCalledWith(`data_sources/${uuidId}`);
@@ -207,7 +254,11 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
       const promise1 = resolver.resolveDatabase(mockClient, 'db-concurrent', 'ds-explicit');
       const promise2 = resolver.resolveDatabase(mockClient, 'db-concurrent', 'ds-explicit');
 
-      resolveGet!({ ...mockDataSource, id: 'ds-explicit' });
+      resolveGet!({
+        ...mockDataSource,
+        id: 'ds-explicit',
+        parent: { type: 'database_id', database_id: 'db-concurrent' },
+      });
 
       const [result1, result2] = await Promise.all([promise1, promise2]);
 
@@ -258,7 +309,9 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
 
       const result = await resolver.queryDatabase(mockClient, 'db-123', { page_size: 10 });
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', { page_size: 10 });
+      expect(mockClient.post).toHaveBeenCalledWith(
+        'data_sources/db-123/query', { page_size: 10 }, undefined, { retrySafe: true },
+      );
       expect(result).toEqual(queryResult);
     });
 
@@ -269,7 +322,9 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
 
       await resolver.queryDatabase(mockClient, 'any-id', { page_size: 20 }, { dataSourceId: 'ds-456' });
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/ds-456/query', { page_size: 20 });
+      expect(mockClient.post).toHaveBeenCalledWith(
+        'data_sources/ds-456/query', { page_size: 20 }, undefined, { retrySafe: true },
+      );
     });
 
     it('should pass empty body when none provided', async () => {
@@ -278,7 +333,9 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
 
       await resolver.queryDatabase(mockClient, 'db-123');
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {});
+      expect(mockClient.post).toHaveBeenCalledWith(
+        'data_sources/db-123/query', {}, undefined, { retrySafe: true },
+      );
     });
 
     it('should pass complex filter bodies through unchanged', async () => {
@@ -294,7 +351,36 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
 
       await resolver.queryDatabase(mockClient, 'db-123', complexBody);
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', complexBody);
+      expect(mockClient.post).toHaveBeenCalledWith(
+        'data_sources/db-123/query', complexBody, undefined, { retrySafe: true },
+      );
+    });
+
+    it('should send filter_properties as repeated query parameters', async () => {
+      setupResolutionMocks();
+      mockClient.post.mockResolvedValue(createPaginatedResult([mockPage]));
+
+      await resolver.queryDatabase(mockClient, 'db-123', {}, {
+        filterProperties: ['title-id', 'status-id'],
+      });
+
+      expect(mockClient.post).toHaveBeenCalledWith(
+        'data_sources/db-123/query',
+        {},
+        { filter_properties: ['title-id', 'status-id'] },
+        { retrySafe: true },
+      );
+    });
+
+    it('should reject an incomplete 10,000-result response', async () => {
+      setupResolutionMocks();
+      mockClient.post.mockResolvedValue({
+        ...createPaginatedResult([mockPage]),
+        request_status: { type: 'incomplete' },
+      });
+
+      await expect(resolver.queryDatabase(mockClient, 'db-123'))
+        .rejects.toMatchObject({ name: 'IncompleteQueryError', code: 'notion_query_incomplete' });
     });
 
     it('should use cached resolution for subsequent queries', async () => {
@@ -312,28 +398,6 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
 
   // ─── updateDatabase ────────────────────────────────────────────────────────
 
-  describe('updateDatabase()', () => {
-    it('should update via data_sources path', async () => {
-      setupResolutionMocks();
-      mockClient.patch.mockResolvedValue({ ...mockDataSource, title: 'Updated' });
-
-      const body = { title: [{ type: 'text', text: { content: 'Updated' } }] };
-      await resolver.updateDatabase(mockClient, 'db-123', body);
-
-      expect(mockClient.patch).toHaveBeenCalledWith('data_sources/db-123', body);
-    });
-
-    it('should update with explicit data source ID', async () => {
-      setupExplicitDsMock('ds-456');
-      mockClient.patch.mockResolvedValue(mockDataSource);
-
-      const body = { title: [{ type: 'text', text: { content: 'New Title' } }] };
-      await resolver.updateDatabase(mockClient, 'any-id', body, { dataSourceId: 'ds-456' });
-
-      expect(mockClient.patch).toHaveBeenCalledWith('data_sources/ds-456', body);
-    });
-  });
-
   // ─── queryDatabaseDirect ──────────────────────────────────────────────────
 
   describe('queryDatabaseDirect()', () => {
@@ -345,7 +409,9 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
       const resolved = await resolver.resolveDatabase(mockClient, 'db-123');
       const result = await resolver.queryDatabaseDirect(mockClient, resolved, { page_size: 10 });
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', { page_size: 10 });
+      expect(mockClient.post).toHaveBeenCalledWith(
+        'data_sources/db-123/query', { page_size: 10 }, undefined, { retrySafe: true },
+      );
       expect(result).toEqual(queryResult);
     });
   });
@@ -381,9 +447,10 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
 
       expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
         page_size: 100,
+        result_type: 'page',
         filter,
         sorts,
-      });
+      }, undefined, { retrySafe: true });
     });
 
     it('should respect limit and truncate results', async () => {
@@ -405,7 +472,8 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
 
       expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
         page_size: 50,
-      });
+        result_type: 'page',
+      }, undefined, { retrySafe: true });
     });
 
     it('should call onProgress callback with running count', async () => {
@@ -444,8 +512,53 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
 
       expect(mockClient.post).toHaveBeenCalledWith('data_sources/db-123/query', {
         page_size: 100,
+        result_type: 'page',
         start_cursor: 'cursor-xyz',
+      }, undefined, { retrySafe: true });
+    });
+
+    it('should fail instead of truncating when has_more has no cursor', async () => {
+      setupResolutionMocks();
+      mockClient.post.mockResolvedValue({
+        results: [mockPage],
+        has_more: true,
+        next_cursor: null,
       });
+
+      await expect(resolver.queryAllPages(mockClient, 'db-123'))
+        .rejects.toThrow('without a next cursor');
+    });
+
+    it('should reject incomplete results before returning partial pages', async () => {
+      setupResolutionMocks();
+      mockClient.post.mockResolvedValue({
+        results: [mockPage],
+        has_more: false,
+        next_cursor: null,
+        request_status: { type: 'incomplete' },
+      });
+
+      await expect(resolver.queryAllPages(mockClient, 'db-123'))
+        .rejects.toThrow('10,000-result safety limit');
+    });
+
+    it('should validate pagination options before querying', async () => {
+      setupResolutionMocks();
+
+      await expect(resolver.queryAllPages(mockClient, 'db-123', { pageSize: 101 }))
+        .rejects.toThrow('between 1 and 100');
+      expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
+    it('should reject a repeated cursor instead of looping forever', async () => {
+      setupResolutionMocks();
+      mockClient.post
+        .mockResolvedValueOnce(createPaginatedResult([mockPage], 'same-cursor', true))
+        .mockResolvedValueOnce(createPaginatedResult([mockPage], 'same-cursor', true));
+
+      await expect(resolver.queryAllPages(mockClient, 'db-123'))
+        .rejects.toThrow('repeated pagination cursor');
+      expect(mockClient.post).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -453,7 +566,7 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
 
   describe('setGlobalDataSourceId()', () => {
     it('should use global data-source-id when no explicit option is provided', async () => {
-      setupExplicitDsMock('ds-global');
+      setupExplicitDsMock('ds-global', 'any-db');
 
       resolver.setGlobalDataSourceId('ds-global');
       await resolver.getDatabaseSchema(mockClient, 'any-db');
@@ -462,7 +575,7 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
     });
 
     it('should prefer explicit dataSourceId over global', async () => {
-      setupExplicitDsMock('ds-explicit');
+      setupExplicitDsMock('ds-explicit', 'any-db');
 
       resolver.setGlobalDataSourceId('ds-global');
       await resolver.getDatabaseSchema(mockClient, 'any-db', { dataSourceId: 'ds-explicit' });
@@ -482,34 +595,32 @@ describe('DatabaseResolver (API v2026-03-11)', () => {
     });
 
     it('should flow through to queryDatabase', async () => {
-      setupExplicitDsMock('ds-global');
+      setupExplicitDsMock('ds-global', 'any-db');
       const queryResult = createPaginatedResult([mockPage]);
       mockClient.post.mockResolvedValue(queryResult);
 
       resolver.setGlobalDataSourceId('ds-global');
       await resolver.queryDatabase(mockClient, 'any-db', { page_size: 10 });
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/ds-global/query', { page_size: 10 });
+      expect(mockClient.post).toHaveBeenCalledWith(
+        'data_sources/ds-global/query', { page_size: 10 }, undefined, { retrySafe: true },
+      );
     });
 
     it('should flow through to queryAllPages', async () => {
-      setupExplicitDsMock('ds-global');
+      setupExplicitDsMock('ds-global', 'any-db');
       mockClient.post.mockResolvedValue(createPaginatedResult([mockPage]));
 
       resolver.setGlobalDataSourceId('ds-global');
       await resolver.queryAllPages(mockClient, 'any-db');
 
-      expect(mockClient.post).toHaveBeenCalledWith('data_sources/ds-global/query', { page_size: 100 });
+      expect(mockClient.post).toHaveBeenCalledWith(
+        'data_sources/ds-global/query',
+        { page_size: 100, result_type: 'page' },
+        undefined,
+        { retrySafe: true },
+      );
     });
 
-    it('should flow through to updateDatabase', async () => {
-      setupExplicitDsMock('ds-global');
-      mockClient.patch.mockResolvedValue(mockDataSource);
-
-      resolver.setGlobalDataSourceId('ds-global');
-      await resolver.updateDatabase(mockClient, 'any-db', { title: 'test' });
-
-      expect(mockClient.patch).toHaveBeenCalledWith('data_sources/ds-global', { title: 'test' });
-    });
   });
 });

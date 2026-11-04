@@ -6,6 +6,15 @@ describe('Search Command', () => {
   let program: Command;
   let mockClient: any;
 
+  function expectSearch(body: unknown): void {
+    expect(mockClient.post).toHaveBeenCalledWith(
+      'search',
+      body,
+      undefined,
+      { retrySafe: true },
+    );
+  }
+
   beforeEach(async () => {
     vi.resetModules();
 
@@ -35,7 +44,7 @@ describe('Search Command', () => {
 
       await program.parseAsync(['node', 'test', 'search']);
 
-      expect(mockClient.post).toHaveBeenCalledWith('search', {
+      expectSearch({
         page_size: 10,
       });
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Test Page'));
@@ -46,7 +55,7 @@ describe('Search Command', () => {
 
       await program.parseAsync(['node', 'test', 'search', 'test query']);
 
-      expect(mockClient.post).toHaveBeenCalledWith('search', {
+      expectSearch({
         query: 'test query',
         page_size: 10,
       });
@@ -67,7 +76,7 @@ describe('Search Command', () => {
 
       await program.parseAsync(['node', 'test', 'search', '--type', 'page']);
 
-      expect(mockClient.post).toHaveBeenCalledWith('search', {
+      expectSearch({
         filter: { property: 'object', value: 'page' },
         page_size: 10,
       });
@@ -78,7 +87,7 @@ describe('Search Command', () => {
 
       await program.parseAsync(['node', 'test', 'search', '--type', 'database']);
 
-      expect(mockClient.post).toHaveBeenCalledWith('search', {
+      expectSearch({
         filter: { property: 'object', value: 'data_source' },
         page_size: 10,
       });
@@ -91,7 +100,7 @@ describe('Search Command', () => {
 
       await program.parseAsync(['node', 'test', 'search', '--sort', 'asc']);
 
-      expect(mockClient.post).toHaveBeenCalledWith('search', {
+      expectSearch({
         sort: {
           direction: 'asc',
           timestamp: 'last_edited_time',
@@ -105,7 +114,7 @@ describe('Search Command', () => {
 
       await program.parseAsync(['node', 'test', 'search', '--sort', 'desc']);
 
-      expect(mockClient.post).toHaveBeenCalledWith('search', {
+      expectSearch({
         sort: {
           direction: 'desc',
           timestamp: 'last_edited_time',
@@ -121,7 +130,7 @@ describe('Search Command', () => {
 
       await program.parseAsync(['node', 'test', 'search', '--limit', '50']);
 
-      expect(mockClient.post).toHaveBeenCalledWith('search', {
+      expectSearch({
         page_size: 50,
       });
     });
@@ -131,7 +140,7 @@ describe('Search Command', () => {
 
       await program.parseAsync(['node', 'test', 'search', '--cursor', 'cursor-123']);
 
-      expect(mockClient.post).toHaveBeenCalledWith('search', {
+      expectSearch({
         page_size: 10,
         start_cursor: 'cursor-123',
       });
@@ -146,7 +155,7 @@ describe('Search Command', () => {
 
       await program.parseAsync(['node', 'test', 'search']);
 
-      expect(console.log).toHaveBeenCalledWith('(more results available)');
+      expect(console.error).toHaveBeenCalledWith('More results are available.');
     });
   });
 
@@ -204,9 +213,7 @@ describe('Search Command', () => {
 
       await expect(
         program.parseAsync(['node', 'test', 'search'])
-      ).rejects.toThrow('process.exit(1)');
-
-      expect(console.error).toHaveBeenCalledWith('Error:', 'API Error: Rate limited');
+      ).rejects.toThrow('API Error: Rate limited');
     });
   });
 
@@ -224,12 +231,15 @@ describe('Search Command', () => {
       expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Second'));
     });
 
-    it('should exit 1 when no results and --first', async () => {
+    it('should mark failure without abruptly terminating when --first has no result', async () => {
       mockClient.post.mockResolvedValue(createPaginatedResult([]));
 
-      await expect(
-        program.parseAsync(['node', 'test', 'search', 'nonexistent', '--first'])
-      ).rejects.toThrow('process.exit(1)');
+      await program.parseAsync(['node', 'test', 'search', 'nonexistent', '--first']);
+
+      expect(process.exit).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      expect(console.error).toHaveBeenCalledWith('No matching result found.');
+      process.exitCode = undefined;
     });
 
     it('should output single object in JSON mode with --first', async () => {
@@ -245,43 +255,14 @@ describe('Search Command', () => {
     });
   });
 
-  describe('--db flag', () => {
-    it('should filter results to pages from specified database', async () => {
-      const page1 = { ...createMockPage('page-1', 'Match'), parent: { type: 'data_source_id', data_source_id: 'ds-1', database_id: 'db-target' } };
-      const page2 = { ...createMockPage('page-2', 'Other'), parent: { type: 'data_source_id', data_source_id: 'ds-2', database_id: 'db-other' } };
-      mockClient.post.mockResolvedValue(createPaginatedResult([page1, page2]));
-
-      await program.parseAsync(['node', 'test', 'search', 'test', '--db', 'db-target']);
-
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Match'));
-      expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Other'));
-    });
-
-    it('should show no results when --db matches nothing', async () => {
-      const page1 = { ...createMockPage('page-1', 'Page'), parent: { type: 'data_source_id', database_id: 'db-other' } };
-      mockClient.post.mockResolvedValue(createPaginatedResult([page1]));
-
-      await program.parseAsync(['node', 'test', 'search', 'test', '--db', 'db-none']);
-
-      expect(console.log).toHaveBeenCalledWith('No results found.');
-    });
-
-    it('should paginate through results when --db filters out first page', async () => {
-      const wrongDb = { ...createMockPage('page-1', 'Wrong'), parent: { type: 'data_source_id', database_id: 'db-other' } };
-      const rightDb = { ...createMockPage('page-2', 'Right'), parent: { type: 'data_source_id', database_id: 'db-target' } };
-
-      mockClient.post
-        .mockResolvedValueOnce({ results: [wrongDb], has_more: true, next_cursor: 'cursor-2' })
-        .mockResolvedValueOnce({ results: [rightDb], has_more: false, next_cursor: null });
-
-      await program.parseAsync(['node', 'test', 'search', 'test', '--db', 'db-target', '--first']);
-
-      expect(mockClient.post).toHaveBeenCalledTimes(2);
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Right'));
-    });
-  });
-
   describe('--exact flag', () => {
+    it('should require an explicit title query', async () => {
+      await expect(program.parseAsync(['node', 'test', 'search', '--exact']))
+        .rejects.toThrow('--exact requires a search query.');
+
+      expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
     it('should filter to exact title matches only', async () => {
       const page1 = createMockPage('page-1', 'Project Alpha');
       const page2 = createMockPage('page-2', 'Project Alpha Beta');
@@ -300,6 +281,41 @@ describe('Search Command', () => {
       await program.parseAsync(['node', 'test', 'search', 'my task', '--exact']);
 
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('My Task'));
+    });
+
+    it('should scan exact --first discovery in full search pages', async () => {
+      const nonMatch = createMockPage('page-1', 'Other');
+      const match = createMockPage('page-2', 'Target');
+      mockClient.post
+        .mockResolvedValueOnce({ results: [nonMatch], has_more: true, next_cursor: 'next-1' })
+        .mockResolvedValueOnce({ results: [match], has_more: false, next_cursor: null });
+
+      await program.parseAsync(['node', 'test', 'search', 'Target', '--exact', '--first']);
+
+      expect(mockClient.post).toHaveBeenNthCalledWith(1, 'search', {
+        query: 'Target',
+        page_size: 100,
+      }, undefined, { retrySafe: true });
+      expect(mockClient.post).toHaveBeenNthCalledWith(2, 'search', {
+        query: 'Target',
+        page_size: 100,
+        start_cursor: 'next-1',
+      }, undefined, { retrySafe: true });
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Target'));
+    });
+
+    it('should reject a repeated cursor while scanning exact matches', async () => {
+      mockClient.post.mockResolvedValue({
+        results: [createMockPage('page-1', 'Other')],
+        has_more: true,
+        next_cursor: 'stuck-cursor',
+      });
+
+      await expect(program.parseAsync([
+        'node', 'test', 'search', 'Target', '--exact', '--limit', '2',
+      ])).rejects.toThrow('repeated pagination cursor stuck-cursor');
+
+      expect(mockClient.post).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -338,7 +354,7 @@ describe('Search Command', () => {
         '--limit', '25',
       ]);
 
-      expect(mockClient.post).toHaveBeenCalledWith('search', {
+      expectSearch({
         query: 'my query',
         filter: { property: 'object', value: 'page' },
         sort: {

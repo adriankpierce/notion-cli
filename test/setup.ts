@@ -5,6 +5,7 @@ beforeEach(() => {
   vi.resetModules();
 
   // Set default test token in environment
+  delete process.env.NOTION_API_TOKEN;
   process.env.NOTION_TOKEN = 'test_token_default';
 
   // Mock process.exit to throw instead of exiting
@@ -25,6 +26,7 @@ beforeEach(() => {
 
 afterEach(() => {
   // Clean up environment variables
+  delete process.env.NOTION_API_TOKEN;
   delete process.env.NOTION_TOKEN;
   delete process.env.NOTION_API_KEY;
 

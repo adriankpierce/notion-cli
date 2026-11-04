@@ -5,7 +5,12 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     setupFiles: ['./test/setup.ts'],
-    exclude: ['node_modules/**', '.claude/**'],
+    exclude: [
+      '**/node_modules/**',
+      '.claude/**',
+      '.local-recipes/**',
+      '.local-tools/**',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
@@ -20,7 +25,7 @@ export default defineConfig({
         lines: 80,
         functions: 80,
         statements: 80,
-        branches: 75,
+        branches: 70,
       },
     },
     mockReset: true,

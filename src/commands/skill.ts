@@ -17,16 +17,22 @@ export function registerSkillCommand(program: Command): void {
   skill
     .command('install [target_dir]')
     .description('Install the Notion skill into a repo\'s .claude/skills/ directory')
-    .action((targetDir?: string) => {
+    .option('--force', 'Replace an existing installed skill')
+    .action((targetDir: string | undefined, options: { force?: boolean }) => {
       const dest = path.resolve(targetDir || '.', '.claude', 'skills', 'notion');
       const src = path.resolve(__dirname, '..', '..', 'skills', 'notion');
 
       if (!fs.existsSync(src)) {
-        console.error(`Error: Skill source not found at ${src}`);
-        process.exit(1);
+        throw new Error(`Skill source not found at ${src}`);
       }
 
-      // Copy recursively
+      if (fs.existsSync(dest)) {
+        if (!options.force) {
+          throw new Error(`Skill already exists at ${dest}; pass --force to replace it`);
+        }
+        fs.rmSync(dest, { recursive: true, force: true });
+      }
+
       copyDir(src, dest);
       console.log(`Installed notion skill to ${dest}`);
     });

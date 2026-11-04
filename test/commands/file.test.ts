@@ -5,10 +5,12 @@ describe('File Command', () => {
   let program: Command;
   let mockClient: any;
   let mockFS: Map<string, Buffer | string>;
+  let mockFileSizes: Map<string, number>;
 
   beforeEach(async () => {
     vi.resetModules();
     mockFS = new Map();
+    mockFileSizes = new Map();
 
     mockClient = {
       get: vi.fn(),
@@ -17,6 +19,9 @@ describe('File Command', () => {
       delete: vi.fn(),
       sendFile: vi.fn(),
     };
+    mockClient.get.mockResolvedValue({
+      bot: { workspace_limits: { max_file_upload_size_in_bytes: 20 * 1024 * 1024 } },
+    });
 
     vi.doMock('../../src/client', () => ({
       getClient: () => mockClient,
@@ -29,6 +34,10 @@ describe('File Command', () => {
         throw new Error(`ENOENT: no such file or directory, open '${path}'`);
       }),
       existsSync: vi.fn((path: string) => mockFS.has(path)),
+      statSync: vi.fn((path: string) => ({
+        isFile: () => mockFS.has(path),
+        size: mockFileSizes.get(path) ?? Buffer.byteLength(mockFS.get(path) ?? ''),
+      })),
     }));
 
     const { registerFileCommand } = await import('../../src/commands/file');
@@ -50,6 +59,8 @@ describe('File Command', () => {
       // Step 1: create file upload
       expect(mockClient.post).toHaveBeenCalledWith('file_uploads', {
         mode: 'single_part',
+        filename: 'photo.jpg',
+        content_type: 'image/jpeg',
       });
 
       // Step 2: send binary with MIME type
@@ -74,6 +85,35 @@ describe('File Command', () => {
       });
 
       expect(console.log).toHaveBeenCalledWith('Uploaded photo.jpg as image block');
+    });
+
+    it('should upload with a personal access token when no bot workspace limit is returned', async () => {
+      const fileBuffer = Buffer.from('personal-token-file');
+      mockFS.set('/tmp/pat-photo.jpg', fileBuffer);
+      mockClient.get.mockResolvedValueOnce({
+        object: 'user',
+        type: 'person',
+        person: { email: 'owner@example.com' },
+      });
+      mockClient.post.mockResolvedValueOnce({ id: 'upload-pat' });
+      mockClient.sendFile.mockResolvedValueOnce({ id: 'upload-pat', status: 'uploaded' });
+      mockClient.patch.mockResolvedValueOnce({ results: [] });
+
+      await program.parseAsync([
+        'node', 'test', 'file', 'upload', 'page-123', '/tmp/pat-photo.jpg',
+      ]);
+
+      expect(mockClient.get).toHaveBeenCalledWith('users/me');
+      expect(mockClient.post).toHaveBeenCalledWith('file_uploads', expect.objectContaining({
+        mode: 'single_part',
+        filename: 'pat-photo.jpg',
+      }));
+      expect(mockClient.sendFile).toHaveBeenCalledWith(
+        'file_uploads/upload-pat/send',
+        fileBuffer,
+        'pat-photo.jpg',
+        'image/jpeg',
+      );
     });
 
     it('should upload from external URL', async () => {
@@ -162,9 +202,6 @@ describe('File Command', () => {
       mockFS.set('/tmp/photo.jpg', Buffer.from('data'));
       mockClient.post.mockResolvedValueOnce({ id: 'upload-123' });
       mockClient.sendFile.mockResolvedValueOnce({ id: 'upload-123', status: 'uploaded' });
-      mockClient.get.mockResolvedValueOnce({
-        results: [{ id: 'first-block-id' }],
-      });
       mockClient.patch.mockResolvedValueOnce({ results: [] });
 
       await program.parseAsync([
@@ -172,10 +209,10 @@ describe('File Command', () => {
         '--position', 'top',
       ]);
 
-      expect(mockClient.get).toHaveBeenCalledWith('blocks/page-123/children', { page_size: 1 });
+      expect(mockClient.get).toHaveBeenCalledWith('users/me');
       expect(mockClient.patch).toHaveBeenCalledWith('blocks/page-123/children', {
         children: [expect.objectContaining({ type: 'image' })],
-        position: { before_block: 'first-block-id' },
+        position: { type: 'start' },
       });
     });
 
@@ -189,23 +226,68 @@ describe('File Command', () => {
         'node', 'test', 'file', 'upload', 'page-123', '/tmp/photo.jpg', '--json',
       ]);
 
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"block-1"'));
+      const output = JSON.parse(vi.mocked(console.log).mock.calls[0][0] as string);
+      expect(output).toMatchObject({
+        file_upload: { id: 'upload-123', status: 'uploaded' },
+        filename: 'photo.jpg',
+        block_type: 'image',
+        attachment: { results: [{ id: 'block-1', type: 'image' }] },
+      });
+    });
+
+    it('should preserve the completed upload ID when page attachment fails', async () => {
+      mockFS.set('/tmp/photo.jpg', Buffer.from('data'));
+      mockClient.post.mockResolvedValueOnce({ id: 'upload-recoverable' });
+      mockClient.sendFile.mockResolvedValueOnce({ id: 'upload-recoverable', status: 'uploaded' });
+      mockClient.patch.mockRejectedValueOnce(new Error('page is locked'));
+
+      await expect(program.parseAsync([
+        'node', 'test', 'file', 'upload', 'page-123', '/tmp/photo.jpg',
+      ])).rejects.toThrow('File upload upload-recoverable completed but could not be attached: page is locked');
+    });
+
+    it('should preserve the created upload ID when sending file data fails', async () => {
+      mockFS.set('/tmp/photo.jpg', Buffer.from('data'));
+      mockClient.post.mockResolvedValueOnce({ id: 'upload-send-failed' });
+      mockClient.sendFile.mockRejectedValueOnce(new Error('conflict while sending'));
+
+      await expect(program.parseAsync([
+        'node', 'test', 'file', 'upload', 'page-123', '/tmp/photo.jpg',
+      ])).rejects.toThrow(
+        'File upload upload-send-failed was created but the file data could not be sent: conflict while sending',
+      );
+
+      expect(mockClient.patch).not.toHaveBeenCalled();
+    });
+
+    it('should normalize a Notion page URL before attaching the upload', async () => {
+      mockFS.set('/tmp/photo.jpg', Buffer.from('data'));
+      mockClient.post.mockResolvedValueOnce({ id: 'upload-123' });
+      mockClient.sendFile.mockResolvedValueOnce({ id: 'upload-123', status: 'uploaded' });
+      mockClient.patch.mockResolvedValueOnce({ results: [] });
+
+      await program.parseAsync([
+        'node', 'test', 'file', 'upload',
+        'https://www.notion.so/Test-0123456789abcdef0123456789abcdef',
+        '/tmp/photo.jpg',
+      ]);
+
+      expect(mockClient.patch).toHaveBeenCalledWith(
+        'blocks/01234567-89ab-cdef-0123-456789abcdef/children',
+        expect.any(Object),
+      );
     });
 
     it('should error when file not found', async () => {
       await expect(
         program.parseAsync(['node', 'test', 'file', 'upload', 'page-123', '/tmp/missing.jpg'])
-      ).rejects.toThrow('process.exit(1)');
-
-      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('File not found'));
+      ).rejects.toThrow('File not found');
     });
 
     it('should error when neither file nor --url provided', async () => {
       await expect(
         program.parseAsync(['node', 'test', 'file', 'upload', 'page-123'])
-      ).rejects.toThrow('process.exit(1)');
-
-      expect(console.error).toHaveBeenCalledWith('Error: Provide a file path or --url');
+      ).rejects.toThrow('Provide a file path or --url');
     });
 
     it('should error when both file and --url provided', async () => {
@@ -216,9 +298,63 @@ describe('File Command', () => {
           'node', 'test', 'file', 'upload', 'page-123', '/tmp/photo.jpg',
           '--url', 'https://example.com/photo.jpg',
         ])
-      ).rejects.toThrow('process.exit(1)');
+      ).rejects.toThrow('Provide either a file path or --url, not both');
+    });
 
-      expect(console.error).toHaveBeenCalledWith('Error: Provide either a file path or --url, not both');
+    it('should reject files requiring multipart before reading them', async () => {
+      mockFS.set('/tmp/large.bin', Buffer.from('placeholder'));
+      mockFileSizes.set('/tmp/large.bin', 20 * 1024 * 1024 + 1);
+
+      await expect(
+        program.parseAsync(['node', 'test', 'file', 'upload', 'page-123', '/tmp/large.bin'])
+      ).rejects.toThrow('require multipart upload');
+
+      expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
+    it('should enforce the bot workspace upload limit before reading the file', async () => {
+      mockFS.set('/tmp/workspace-large.pdf', Buffer.from('placeholder'));
+      mockFileSizes.set('/tmp/workspace-large.pdf', 6 * 1024 * 1024);
+      mockClient.get.mockResolvedValueOnce({
+        bot: { workspace_limits: { max_file_upload_size_in_bytes: 5 * 1024 * 1024 } },
+      });
+
+      await expect(program.parseAsync([
+        'node', 'test', 'file', 'upload', 'page-123', '/tmp/workspace-large.pdf',
+      ])).rejects.toThrow('workspace');
+
+      expect(mockClient.post).not.toHaveBeenCalled();
+      expect(mockClient.sendFile).not.toHaveBeenCalled();
+    });
+
+    it('should reject unsupported extensions before creating an upload', async () => {
+      mockFS.set('/tmp/archive.exe', Buffer.from('data'));
+
+      await expect(program.parseAsync([
+        'node', 'test', 'file', 'upload', 'page-123', '/tmp/archive.exe',
+      ])).rejects.toThrow('Unsupported Notion file type');
+
+      expect(mockClient.get).not.toHaveBeenCalled();
+      expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
+    it('should surface external import failure details and never attach the upload', async () => {
+      mockClient.post.mockResolvedValueOnce({ id: 'upload-failed', status: 'pending' });
+      mockClient.get.mockResolvedValueOnce({
+        id: 'upload-failed',
+        status: 'failed',
+        file_import_result: {
+          type: 'error',
+          error: { message: 'Remote server did not provide a content type' },
+        },
+      });
+
+      await expect(program.parseAsync([
+        'node', 'test', 'file', 'upload', 'page-123',
+        '--url', 'https://example.com/file.bin',
+      ])).rejects.toThrow('Remote server did not provide a content type');
+
+      expect(mockClient.patch).not.toHaveBeenCalled();
     });
   });
 });

@@ -30,7 +30,7 @@ describe('Database List and Schema Commands', () => {
   });
 
   describe('db list', () => {
-    it('should list all accessible databases', async () => {
+    it('should list indexed data sources', async () => {
       mockClient.post.mockResolvedValue(createPaginatedResult([
         mockDatabase,
         { ...mockDatabase, id: 'db-456', title: [{ plain_text: 'Second Database' }] },
@@ -41,8 +41,8 @@ describe('Database List and Schema Commands', () => {
       expect(mockClient.post).toHaveBeenCalledWith('search', expect.objectContaining({
         filter: { property: 'object', value: 'data_source' },
         page_size: 20,
-      }));
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Found 2 accessible database(s)'));
+      }), undefined, { retrySafe: true });
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Found 2 indexed data source(s)'));
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Test Database'));
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Second Database'));
     });
@@ -54,7 +54,7 @@ describe('Database List and Schema Commands', () => {
 
       expect(mockClient.post).toHaveBeenCalledWith('search', expect.objectContaining({
         page_size: 5,
-      }));
+      }), undefined, { retrySafe: true });
     });
 
     it('should show compact output with --compact', async () => {
@@ -83,7 +83,7 @@ describe('Database List and Schema Commands', () => {
 
       await program.parseAsync(['node', 'test', 'database', 'list']);
 
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Found 2 accessible database(s)'));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Found 2 indexed data source(s)'));
     });
 
     it('should handle no databases found', async () => {
@@ -91,7 +91,7 @@ describe('Database List and Schema Commands', () => {
 
       await program.parseAsync(['node', 'test', 'database', 'list']);
 
-      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Found 0 accessible database(s)'));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Found 0 indexed data source(s)'));
     });
 
     it('should show [multi-source] tag for databases with data_sources', async () => {
@@ -181,6 +181,8 @@ describe('Database List and Schema Commands', () => {
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('## Properties'));
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Name'));
       expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Status'));
+      expect(console.log).toHaveBeenCalledWith('  ID: title');
+      expect(console.log).toHaveBeenCalledWith('  ID: status');
     });
 
     it('should output JSON with --json', async () => {
@@ -308,9 +310,7 @@ describe('Database List and Schema Commands', () => {
 
       await expect(
         program.parseAsync(['node', 'test', 'database', 'schema', 'invalid-db'])
-      ).rejects.toThrow('process.exit(1)');
-
-      expect(console.error).toHaveBeenCalledWith('Error:', 'Database not found');
+      ).rejects.toThrow('Database not found');
     });
   });
 });

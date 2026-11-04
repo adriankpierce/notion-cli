@@ -1,72 +1,73 @@
 {
-  "name": "notion-cli-agent",
-  "version": "0.11.0",
-  "description": "The most powerful CLI for Notion — built for humans AND AI agents. Features smart queries, Obsidian sync, batch operations, validation, backups, and more.",
+  "name": "@adriankpierce/notion-cli-agent",
+  "version": "0.12.0-alpha.0",
+  "description": "An agent-oriented CLI for Notion pages, native Markdown, and data sources.",
   "type": "module",
+  "packageManager": "pnpm@10.34.5",
   "bin": {
-    "notion": "dist/cli.js",
-    "notion-cli-agent": "dist/cli.js"
+    "notion": "dist/cli.js"
   },
   "files": [
     "dist",
+    "skills",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean --silent && tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
     "start": "node dist/cli.js",
-    "lint": "eslint src/",
+    "lint": "eslint src/ test/ scripts/ vitest.config.ts",
     "test": "vitest",
+    "test:run": "vitest run",
     "test:watch": "vitest --watch",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
-    "prepare": "tsc",
-    "prepublishOnly": "pnpm run build"
+    "test:cli": "npm run build --silent && vitest run test/cli-surface.test.ts test/commands/help-agent.test.ts",
+    "package:check": "npm run build --silent && node scripts/verify-package.mjs",
+    "verify": "npm run lint && npm run test:run && npm run package:check",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run verify"
   },
   "keywords": [
     "notion",
     "cli",
     "notion-api",
     "ai-agents",
-    "obsidian",
-    "productivity",
     "automation",
-    "backup",
-    "sync",
-    "llm",
-    "ai",
+    "markdown",
+    "data-source",
     "agent"
   ],
-  "author": "Balneario de Cofrentes",
+  "author": "Adrian Pierce",
   "license": "MIT",
-  "homepage": "https://github.com/Balneario-de-Cofrentes/notion-cli-agent#readme",
+  "homepage": "https://github.com/adriankpierce/notion-cli-agent#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Balneario-de-Cofrentes/notion-cli-agent.git"
+    "url": "git+https://github.com/adriankpierce/notion-cli-agent.git"
   },
   "bugs": {
-    "url": "https://github.com/Balneario-de-Cofrentes/notion-cli-agent/issues"
+    "url": "https://github.com/adriankpierce/notion-cli-agent/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
-    "chalk": "^5.3.0",
     "commander": "^12.1.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.0",
     "@types/node": "^22.19.15",
+    "@vitest/coverage-v8": "4.1.10",
     "eslint": "^9.0.0",
+    "globals": "^16.4.0",
     "typescript": "^5.7.0",
-    "vitest": "^4.1.0"
+    "typescript-eslint": "^8.46.0",
+    "vitest": "4.1.10"
   },
   "engines": {
     "node": ">=20"
-  },
-  "pnpm": {
-    "overrides": {
-      "minimatch": ">=3.1.4",
-      "rollup": ">=4.59.0",
-      "ajv": ">=6.14.0",
-      "flatted": ">=3.4.2"
-    }
   }
 }

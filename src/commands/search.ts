@@ -5,7 +5,6 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { formatOutput, formatPageTitle, formatDatabaseTitle } from '../utils/format.js';
 import { withErrorHandler } from '../utils/command-handler.js';
-import { getParentDatabaseId } from '../utils/notion-helpers.js';
 
 interface SearchItem {
   object: 'page' | 'database' | 'data_source';
@@ -28,20 +27,37 @@ function getItemTitle(item: SearchItem): string {
   return formatDatabaseTitle(item);
 }
 
+function pageSize(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+    throw new Error('--limit must be an integer between 1 and 100.');
+  }
+  return parsed;
+}
+
 export function registerSearchCommand(program: Command): void {
   program
     .command('search [query]')
-    .description('Search pages and databases')
+    .description('Discover pages and data sources by indexed title')
     .option('-t, --type <type>', 'Filter by type: page, database', '')
     .option('-s, --sort <direction>', 'Sort by last_edited_time: asc, desc', '')
     .option('-l, --limit <number>', 'Max results to return', '10')
     .option('--cursor <cursor>', 'Pagination cursor for next page')
-    .option('--db <database_id>', 'Filter results to pages in this database')
     .option('--exact', 'Only show exact title matches')
     .option('--first', 'Return only the first result (exit 1 if none)')
-    .option('-j, --json', 'Output raw JSON')
+    .option('-j, --json', 'Output a structured search result')
     .action(withErrorHandler(async (query: string | undefined, options) => {
       const client = getClient();
+
+      if (options.exact && !query) {
+        throw new Error('--exact requires a search query.');
+      }
+      if (options.type && options.type !== 'page' && options.type !== 'database') {
+        throw new Error('--type must be "page" or "database".');
+      }
+      if (options.sort && options.sort !== 'asc' && options.sort !== 'desc') {
+        throw new Error('--sort must be "asc" or "desc".');
+      }
 
       const body: Record<string, unknown> = {};
       if (query) body.query = query;
@@ -55,31 +71,32 @@ export function registerSearchCommand(program: Command): void {
           timestamp: 'last_edited_time',
         };
       }
-      const needsPostFilter = options.db || options.exact;
-      const requestLimit = parseInt(options.limit || '10', 10);
-      body.page_size = needsPostFilter ? 100 : requestLimit;
-      if (options.cursor) body.start_cursor = options.cursor;
+      const needsPostFilter = options.exact;
+      const requestLimit = pageSize(options.limit || '10');
+      body.page_size = requestLimit;
 
-      // When post-filtering (--db, --exact), paginate until we have enough
+      // When post-filtering an exact title match, paginate until we have enough
       // matches or exhaust the cursor. Without post-filters, single request.
       let items: SearchItem[] = [];
       let lastHasMore = false;
       let lastCursor: string | null = null;
 
       let cursor: string | undefined = options.cursor;
+      const seenCursors = new Set<string>(cursor ? [cursor] : []);
       do {
-        if (cursor) body.start_cursor = cursor;
-        const result = await client.post<SearchResult>('search', body);
+        const requestBody: Record<string, unknown> = { ...body };
+        if (cursor) requestBody.start_cursor = cursor;
+        if (needsPostFilter) {
+          requestBody.page_size = options.first ? 100 : Math.max(1, requestLimit - items.length);
+        }
+        const result = await client.post<SearchResult>(
+          'search',
+          requestBody,
+          undefined,
+          { retrySafe: true },
+        );
 
         let batch = result.results;
-
-        if (options.db) {
-          batch = batch.filter(item => {
-            if (!item.parent) return false;
-            const parentId = getParentDatabaseId(item.parent as any);
-            return parentId === options.db;
-          });
-        }
 
         if (options.exact && query) {
           const lowerQuery = query.toLowerCase();
@@ -90,11 +107,21 @@ export function registerSearchCommand(program: Command): void {
         lastHasMore = result.has_more;
         lastCursor = result.next_cursor;
 
+        if (result.has_more && !result.next_cursor) {
+          throw new Error('Workspace search reported more results without a next cursor.');
+        }
+
         // Stop conditions: enough results, no more pages, or no post-filter
         if (!needsPostFilter) break;
         if (options.first && items.length >= 1) break;
         if (items.length >= requestLimit) break;
         cursor = result.has_more ? (result.next_cursor ?? undefined) : undefined;
+        if (cursor) {
+          if (seenCursors.has(cursor)) {
+            throw new Error(`Workspace search repeated pagination cursor ${cursor}.`);
+          }
+          seenCursors.add(cursor);
+        }
       } while (cursor);
 
       // Trim to requested limit
@@ -102,11 +129,13 @@ export function registerSearchCommand(program: Command): void {
         items = items.slice(0, requestLimit);
       }
 
-      // --first: return one result or exit 1
+      // --first: return one result or mark the command unsuccessful.
       if (options.first) {
         if (items.length === 0) {
-          if (!options.json) console.error('No matching result found.');
-          process.exit(1);
+          if (options.json) console.log(formatOutput(null));
+          else console.error('No matching result found.');
+          process.exitCode = 1;
+          return;
         }
         items = [items[0]];
       }
@@ -127,7 +156,7 @@ export function registerSearchCommand(program: Command): void {
         console.log(`[${type}] ${item.id} ${title}`);
       }
       if (lastHasMore && !options.first) {
-        console.log(`(more results available)`);
+        console.error('More results are available.');
       }
     }));
 }
